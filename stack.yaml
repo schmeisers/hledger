@@ -7,7 +7,6 @@ packages:
 - hledger-lib
 - hledger
 - hledger-ui
-- hledger-web
 - hledger-api
 
 extra-deps:
@@ -16,6 +15,5 @@ extra-deps:
 - vty-5.14
 - text-zipper-0.8.1
 # for hledger-web:
-- wai-handler-launch-3.0.2.1
 
 # cf https://github.com/commercialhaskell/stack/wiki/stack.yaml
