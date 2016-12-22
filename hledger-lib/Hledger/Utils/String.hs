@@ -41,6 +41,8 @@ module Hledger.Utils.String (
  takeWidth,
  fitString,
  fitStringMulti,
+ alignDecimal,
+ alignDecimalMulti,
  padLeftWide,
  padRightWide
  ) where
@@ -287,6 +289,49 @@ fitString mminwidth mmaxwidth ellipsify rightside s = (clip . pad) s
 fitStringMulti :: Maybe Int -> Maybe Int -> Bool -> Bool -> String -> String
 fitStringMulti mminwidth mmaxwidth ellipsify rightside s =
   (intercalate "\n" . map (fitString mminwidth mmaxwidth ellipsify rightside) . lines) s
+
+-- | Split string into list.
+splitWhen     :: (Char -> Bool) -> String -> [String]
+splitWhen p s =  case dropWhile p s of
+                      "" -> []
+                      s' -> w : splitWhen p s''
+                            where (w, s'') = break p s'
+
+-- | Align and fit string to first decimal or period.
+-- Follows the definition of fitString but puts the decimal on the minwidth or maxwidth
+alignDecimal :: Maybe Int -> Maybe Int -> Bool -> Bool -> String -> String
+alignDecimal mminwidth mmaxwidth ellipsify rightside s = (clip . pad) s
+  where
+    clip :: String -> String
+    clip s =
+      case mmaxwidth of
+        Just w
+          | strWidth s > w ->
+            case rightside of
+              True  -> takeWidth (w - length ellipsis) s ++ ellipsis
+              False -> ellipsis ++ reverse (takeWidth (w - length ellipsis) $ reverse s)
+          | otherwise -> s
+          where
+            ellipsis = if ellipsify then ".." else ""
+        Nothing -> s
+    pad :: String -> String
+    pad s =
+      case mminwidth of
+        Just w
+          | sw < w ->
+            case rightside of
+              True  -> s ++ replicate (w - sw) ' '
+              False -> replicate (w - sw) ' ' ++ s
+          | otherwise -> s
+        Nothing -> s
+      where sw = strWidth $ head $ splitWhen (=='.') s
+
+-- | A version of alignDecimal that works on multi-line strings,
+-- separate for now to avoid breakage.
+-- This will rewrite any line endings to unix newlines.
+alignDecimalMulti :: Maybe Int -> Maybe Int -> Bool -> Bool -> String -> String
+alignDecimalMulti mminwidth mmaxwidth ellipsify rightside s =
+  (intercalate "\n" . map (alignDecimal mminwidth mmaxwidth ellipsify rightside) . lines) s
 
 -- | Left-pad a string to the specified width.
 -- Treats wide characters as double width.

@@ -202,10 +202,11 @@ postingAsLines elideamount onelineamounts ps p =
     -- currently prices are considered part of the amount string when right-aligning amounts
     amount
       | elideamount    = ""
-      | onelineamounts = fitString (Just amtwidth) Nothing False False $ showMixedAmountOneLine $ pamount p
-      | otherwise      = fitStringMulti (Just amtwidth) Nothing False False $ showMixedAmount $ pamount p
+      | onelineamounts = alignDecimal (Just (amtwidth - acctwidth)) Nothing False False $ showMixedAmountOneLine $ pamount p
+      | otherwise      = alignDecimalMulti (Just (amtwidth - acctwidth)) Nothing False False $ showMixedAmount $ pamount p
       where
-        amtwidth = maximum $ 12 : map (strWidth . showMixedAmount . pamount) ps  -- min. 12 for backwards compatibility
+        amtwidth = maximum $ 42 : map (strWidth . showMixedAmount . pamount) ps  -- min. 12 for backwards compatibility
+        acctwidth = maximum $ map (textWidth . paccount) ps
 
     (samelinecomment, newlinecomments) =
       case renderCommentLines (pcomment p) of []   -> ("",[])
