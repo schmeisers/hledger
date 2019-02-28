@@ -40,7 +40,7 @@ exchange rates.
 
 -}
 
-{-# LANGUAGE CPP, StandaloneDeriving, RecordWildCards, OverloadedStrings #-}
+{-# LANGUAGE StandaloneDeriving, RecordWildCards, OverloadedStrings #-}
 
 module Hledger.Data.Amount (
   -- * Amount
@@ -58,9 +58,16 @@ module Hledger.Data.Amount (
   -- ** arithmetic
   costOfAmount,
   divideAmount,
+  multiplyAmount,
+  divideAmountAndPrice,
+  multiplyAmountAndPrice,
+  amountValue,
+  amountTotalPriceToUnitPrice,
   -- ** rendering
   amountstyle,
+  styleAmount,
   showAmount,
+  cshowAmount,
   showAmountWithZeroCommodity,
   showAmountDebug,
   showAmountWithoutPrice,
@@ -68,6 +75,12 @@ module Hledger.Data.Amount (
   maxprecisionwithpoint,
   setAmountPrecision,
   withPrecision,
+  setFullPrecision,
+  setMinimalPrecision,
+  setAmountInternalPrecision,
+  withInternalPrecision,
+  setAmountDecimalPoint,
+  withDecimalPoint,
   canonicaliseAmount,
   -- * MixedAmount
   nullmixedamt,
@@ -81,6 +94,9 @@ module Hledger.Data.Amount (
   -- ** arithmetic
   costOfMixedAmount,
   divideMixedAmount,
+  multiplyMixedAmount,
+  divideMixedAmountAndPrice,
+  multiplyMixedAmountAndPrice,
   averageMixedAmounts,
   isNegativeAmount,
   isNegativeMixedAmount,
@@ -89,66 +105,69 @@ module Hledger.Data.Amount (
   isZeroMixedAmount,
   isReallyZeroMixedAmount,
   isReallyZeroMixedAmountCost,
+  mixedAmountValue,
+  mixedAmountTotalPriceToUnitPrice,
   -- ** rendering
+  styleMixedAmount,
   showMixedAmount,
   showMixedAmountOneLine,
   showMixedAmountDebug,
   showMixedAmountWithoutPrice,
   showMixedAmountOneLineWithoutPrice,
+  cshowMixedAmountWithoutPrice,
+  cshowMixedAmountOneLineWithoutPrice,
   showMixedAmountWithZeroCommodity,
   showMixedAmountWithPrecision,
   setMixedAmountPrecision,
   canonicaliseMixedAmount,
   -- * misc.
   ltraceamount,
-  tests_Hledger_Data_Amount
+  tests_Amount
 ) where
 
 import Data.Char (isDigit)
-import Data.Decimal (roundTo)
+import Data.Decimal (roundTo, decimalPlaces, normalizeDecimal)
 import Data.Function (on)
 import Data.List
 import Data.Map (findWithDefault)
 import Data.Maybe
+import Data.Time.Calendar (Day)
 -- import Data.Text (Text)
 import qualified Data.Text as T
-import Test.HUnit
+import Safe (maximumDef)
 import Text.Printf
 import qualified Data.Map as M
 
 import Hledger.Data.Types
 import Hledger.Data.Commodity
-import Hledger.Utils
+import Hledger.Utils 
 
 
 deriving instance Show MarketPrice
 
+
+-------------------------------------------------------------------------------
+-- Amount styles
+
+-- | Default amount style 
 amountstyle = AmountStyle L False 0 (Just '.') Nothing
+
 
 -------------------------------------------------------------------------------
 -- Amount
-
-instance Show Amount where
-  show _a@Amount{..}
-    --  debugLevel < 2 = showAmountWithoutPrice a
-    --  debugLevel < 3 = showAmount a
-    | debugLevel < 6 =
-       printf "Amount {acommodity=%s, aquantity=%s, ..}" (show acommodity) (show aquantity)
-    | otherwise      = --showAmountDebug a
-       printf "Amount {acommodity=%s, aquantity=%s, aprice=%s, astyle=%s}" (show acommodity) (show aquantity) (showPriceDebug aprice) (show astyle)
 
 instance Num Amount where
     abs a@Amount{aquantity=q}    = a{aquantity=abs q}
     signum a@Amount{aquantity=q} = a{aquantity=signum q}
     fromInteger i                = nullamt{aquantity=fromInteger i}
-    negate a@Amount{aquantity=q} = a{aquantity=(-q)}
+    negate a@Amount{aquantity=q} = a{aquantity= -q}
     (+)                          = similarAmountsOp (+)
     (-)                          = similarAmountsOp (-)
     (*)                          = similarAmountsOp (*)
 
 -- | The empty simple amount.
 amount, nullamt :: Amount
-amount = Amount{acommodity="", aquantity=0, aprice=NoPrice, astyle=amountstyle}
+amount = Amount{acommodity="", aquantity=0, aprice=NoPrice, astyle=amountstyle, aismultiplier=False}
 nullamt = amount
 
 -- | A temporary value for parsed transactions which had no amount specified.
@@ -197,9 +216,40 @@ costOfAmount a@Amount{aquantity=q, aprice=price} =
       UnitPrice  p@Amount{aquantity=pq} -> p{aquantity=pq * q}
       TotalPrice p@Amount{aquantity=pq} -> p{aquantity=pq * signum q}
 
+-- | Replace an amount's TotalPrice, if it has one, with an equivalent UnitPrice.
+-- Has no effect on amounts without one.
+-- Also increases the unit price's display precision to show one extra decimal place,
+-- to help keep transaction amounts balancing. 
+-- Does Decimal division, might be some rounding/irrational number issues.
+amountTotalPriceToUnitPrice :: Amount -> Amount
+amountTotalPriceToUnitPrice 
+  a@Amount{aquantity=q, aprice=TotalPrice pa@Amount{aquantity=pq, astyle=ps@AmountStyle{asprecision=pp}}}
+  = a{aprice = UnitPrice pa{aquantity=abs (pq/q), astyle=ps{asprecision=pp+1}}}
+amountTotalPriceToUnitPrice a = a
+
 -- | Divide an amount's quantity by a constant.
-divideAmount :: Amount -> Quantity -> Amount
-divideAmount a@Amount{aquantity=q} d = a{aquantity=q/d}
+divideAmount :: Quantity -> Amount -> Amount
+divideAmount n a@Amount{aquantity=q} = a{aquantity=q/n}
+
+-- | Multiply an amount's quantity by a constant.
+multiplyAmount :: Quantity -> Amount -> Amount
+multiplyAmount n a@Amount{aquantity=q} = a{aquantity=q*n}
+
+-- | Divide an amount's quantity (and its total price, if it has one) by a constant.
+-- The total price will be kept positive regardless of the multiplier's sign.
+divideAmountAndPrice :: Quantity -> Amount -> Amount
+divideAmountAndPrice n a@Amount{aquantity=q,aprice=p} = a{aquantity=q/n, aprice=f p}
+  where
+    f (TotalPrice a) = TotalPrice $ abs $ n `divideAmount` a
+    f p = p
+
+-- | Multiply an amount's quantity (and its total price, if it has one) by a constant.
+-- The total price will be kept positive regardless of the multiplier's sign.
+multiplyAmountAndPrice :: Quantity -> Amount -> Amount
+multiplyAmountAndPrice n a@Amount{aquantity=q,aprice=p} = a{aquantity=q*n, aprice=f p}
+  where
+    f (TotalPrice a) = TotalPrice $ abs $ n `multiplyAmount` a
+    f p = p
 
 -- | Is this amount negative ? The price is ignored.
 isNegativeAmount :: Amount -> Bool
@@ -209,8 +259,8 @@ digits = "123456789" :: String
 
 -- | Does this amount appear to be zero when displayed with its given precision ?
 isZeroAmount :: Amount -> Bool
-isZeroAmount a --  a==missingamt = False
-               | otherwise     = (null . filter (`elem` digits) . showAmountWithoutPriceOrCommodity) a
+isZeroAmount --  a==missingamt = False
+  = not . any (`elem` digits) . showAmountWithoutPriceOrCommodity
 
 -- | Is this amount "really" zero, regardless of the display precision ?
 isReallyZeroAmount :: Amount -> Bool
@@ -229,6 +279,23 @@ setAmountPrecision p a@Amount{astyle=s} = a{astyle=s{asprecision=p}}
 withPrecision :: Amount -> Int -> Amount
 withPrecision = flip setAmountPrecision
 
+-- | Increase an amount's display precision, if necessary, enough so
+-- that it will be shown exactly, with all significant decimal places
+-- (excluding trailing zeros).
+setFullPrecision :: Amount -> Amount
+setFullPrecision a = setAmountPrecision p a
+  where
+    p                = max displayprecision normalprecision
+    displayprecision = asprecision $ astyle a
+    normalprecision  = fromIntegral $ decimalPlaces $ normalizeDecimal $ aquantity a
+
+-- | Set an amount's display precision to just enough so that it will
+-- be shown exactly, with all significant decimal places.
+setMinimalPrecision :: Amount -> Amount
+setMinimalPrecision a = setAmountPrecision normalprecision a
+  where
+    normalprecision  = fromIntegral $ decimalPlaces $ normalizeDecimal $ aquantity a
+
 -- | Get a string representation of an amount for debugging,
 -- appropriate to the current debug level. 9 shows maximum detail.
 showAmountDebug :: Amount -> String
@@ -238,6 +305,35 @@ showAmountDebug Amount{..} = printf "Amount {acommodity=%s, aquantity=%s, aprice
 -- | Get the string representation of an amount, without any \@ price.
 showAmountWithoutPrice :: Amount -> String
 showAmountWithoutPrice a = showAmount a{aprice=NoPrice}
+
+-- | Set an amount's internal precision, ie rounds the Decimal representing 
+-- the amount's quantity to some number of decimal places.
+-- Rounding is done with Data.Decimal's default roundTo function:
+-- "If the value ends in 5 then it is rounded to the nearest even value (Banker's Rounding)".
+-- Does not change the amount's display precision.
+-- Intended only for internal use, eg when comparing amounts in tests. 
+setAmountInternalPrecision :: Int -> Amount -> Amount
+setAmountInternalPrecision p a@Amount{ aquantity=q, astyle=s } = a{ 
+   astyle=s{asprecision=p} 
+  ,aquantity=roundTo (fromIntegral p) q
+  }
+
+-- | Set an amount's internal precision, flipped.
+-- Intended only for internal use, eg when comparing amounts in tests. 
+withInternalPrecision :: Amount -> Int -> Amount
+withInternalPrecision = flip setAmountInternalPrecision
+
+-- | Set (or clear) an amount's display decimal point.
+setAmountDecimalPoint :: Maybe Char -> Amount -> Amount
+setAmountDecimalPoint mc a@Amount{ astyle=s } = a{ astyle=s{asdecimalpoint=mc} }
+
+-- | Set (or clear) an amount's display decimal point, flipped.
+withDecimalPoint :: Amount -> Maybe Char -> Amount
+withDecimalPoint = flip setAmountDecimalPoint
+
+-- | Colour version.
+cshowAmountWithoutPrice :: Amount -> String
+cshowAmountWithoutPrice a = cshowAmount a{aprice=NoPrice}
 
 -- | Get the string representation of an amount, without any price or commodity symbol.
 showAmountWithoutPriceOrCommodity :: Amount -> String
@@ -253,6 +349,14 @@ showPriceDebug NoPrice         = ""
 showPriceDebug (UnitPrice pa)  = " @ "  ++ showAmountDebug pa
 showPriceDebug (TotalPrice pa) = " @@ " ++ showAmountDebug pa
 
+-- | Given a map of standard amount display styles, apply the appropriate one to this amount.
+-- If there's no standard style for this amount's commodity, return the amount unchanged.
+styleAmount :: M.Map CommoditySymbol AmountStyle -> Amount -> Amount
+styleAmount styles a =
+  case M.lookup (acommodity a) styles of
+    Just s  -> a{astyle=s}
+    Nothing -> a 
+
 -- | Get the string representation of an amount, based on its
 -- commodity's display settings. String representations equivalent to
 -- zero are converted to just \"0\". The special "missing" amount is
@@ -260,18 +364,25 @@ showPriceDebug (TotalPrice pa) = " @@ " ++ showAmountDebug pa
 showAmount :: Amount -> String
 showAmount = showAmountHelper False
 
+-- | Colour version. For a negative amount, adds ANSI codes to change the colour, 
+-- currently to hard-coded red.
+cshowAmount :: Amount -> String
+cshowAmount a =
+  (if isNegativeAmount a then color Dull Red else id) $
+  showAmountHelper False a
+
 showAmountHelper :: Bool -> Amount -> String
 showAmountHelper _ Amount{acommodity="AUTO"} = ""
-showAmountHelper showzerocommodity a@(Amount{acommodity=c, aprice=p, astyle=AmountStyle{..}}) =
+showAmountHelper showzerocommodity a@Amount{acommodity=c, aprice=p, astyle=AmountStyle{..}} =
     case ascommodityside of
       L -> printf "%s%s%s%s" (T.unpack c') space quantity' price
       R -> printf "%s%s%s%s" quantity' space (T.unpack c') price
     where
       quantity = showamountquantity a
-      displayingzero = null $ filter (`elem` digits) $ quantity
+      displayingzero = not (any (`elem` digits) quantity)
       (quantity',c') | displayingzero && not showzerocommodity = ("0","")
                      | otherwise = (quantity, quoteCommoditySymbolIfNeeded c)
-      space = if (not (T.null c') && ascommodityspaced) then " " else "" :: String
+      space = if not (T.null c') && ascommodityspaced then " " else "" :: String
       price = showPrice p
 
 -- | Like showAmount, but show a zero amount's commodity if it has one.
@@ -282,7 +393,7 @@ showAmountWithZeroCommodity = showAmountHelper True
 -- using the display settings from its commodity.
 showamountquantity :: Amount -> String
 showamountquantity Amount{aquantity=q, astyle=AmountStyle{asprecision=p, asdecimalpoint=mdec, asdigitgroups=mgrps}} =
-    punctuatenumber (fromMaybe '.' mdec) mgrps $ qstr
+    punctuatenumber (fromMaybe '.' mdec) mgrps qstr
     where
       -- isint n = fromIntegral (round n) == n
       qstr -- p == maxprecision && isint q = printf "%d" (round q::Integer)
@@ -333,14 +444,38 @@ canonicaliseAmount styles a@Amount{acommodity=c, astyle=s} = a{astyle=s'}
     where
       s' = findWithDefault s c styles
 
+-- | Find the market value of this amount on the given date, in it's
+-- default valuation commodity, based on recorded market prices.
+-- If no default valuation commodity can be found, the amount is left
+-- unchanged.
+amountValue :: Journal -> Day -> Amount -> Amount
+amountValue j d a =
+  case commodityValue j d (acommodity a) of
+    Just v  -> v{aquantity=aquantity v * aquantity a}
+    Nothing -> a
+
+-- This is here not in Commodity.hs to use the Amount Show instance above for debugging. 
+-- | Find the market value, if known, of one unit of this commodity (A) on
+-- the given valuation date, in the commodity (B) mentioned in the latest
+-- applicable market price. The latest applicable market price is the market
+-- price directive for commodity A with the latest date that is on or before
+-- the valuation date; or if there are multiple such prices with the same date,
+-- the last parsed.
+commodityValue :: Journal -> Day -> CommoditySymbol -> Maybe Amount
+commodityValue j valuationdate c
+    | null applicableprices = dbg Nothing
+    | otherwise             = dbg $ Just $ mpamount $ last applicableprices
+  where
+    dbg = dbg8 ("using market price for "++T.unpack c)
+    applicableprices =
+      [p | p <- sortOn mpdate $ jmarketprices j
+      , mpcommodity p == c
+      , mpdate p <= valuationdate
+      ]
+
+
 -------------------------------------------------------------------------------
 -- MixedAmount
-
-instance Show MixedAmount where
-  show
-    | debugLevel < 3 = intercalate "\\n" . lines . showMixedAmountWithoutPrice
-    --  debugLevel < 6 = intercalate "\\n" . lines . showMixedAmount
-    | otherwise      = showMixedAmountDebug
 
 instance Num MixedAmount where
     fromInteger i = Mixed [fromInteger i]
@@ -389,7 +524,7 @@ normaliseHelper squashprices (Mixed as)
     (zeros, nonzeros) = partition isReallyZeroAmount $
                         map sumSimilarAmountsUsingFirstPrice $
                         groupBy groupfn $
-                        sortBy sortfn $
+                        sortBy sortfn
                         as
     sortfn  | squashprices = compare `on` acommodity
             | otherwise    = compare `on` \a -> (acommodity a, aprice a)
@@ -400,42 +535,18 @@ normaliseHelper squashprices (Mixed as)
     combinableprices Amount{aprice=UnitPrice p1} Amount{aprice=UnitPrice p2} = p1 == p2
     combinableprices _ _ = False
 
-tests_normaliseMixedAmount = [
-  "normaliseMixedAmount" ~: do
-   -- assertEqual "missing amount is discarded" (Mixed [nullamt]) (normaliseMixedAmount $ Mixed [usd 0, missingamt])
-   assertEqual "any missing amount means a missing mixed amount" missingmixedamt (normaliseMixedAmount $ Mixed [usd 0, missingamt])
-   assertEqual "unpriced same-commodity amounts are combined" (Mixed [usd 2]) (normaliseMixedAmount $ Mixed [usd 0, usd 2])
-   -- amounts with same unit price are combined
-   normaliseMixedAmount (Mixed [usd 1 `at` eur 1, usd 1 `at` eur 1]) `is` Mixed [usd 2 `at` eur 1]
-   -- amounts with different unit prices are not combined
-   normaliseMixedAmount (Mixed [usd 1 `at` eur 1, usd 1 `at` eur 2]) `is` Mixed [usd 1 `at` eur 1, usd 1 `at` eur 2]
-   -- amounts with total prices are not combined
-   normaliseMixedAmount (Mixed  [usd 1 @@ eur 1, usd 1 @@ eur 1]) `is` Mixed [usd 1 @@ eur 1, usd 1 @@ eur 1]
- ]
-
 -- | Like normaliseMixedAmount, but combine each commodity's amounts
 -- into just one by throwing away all prices except the first. This is
 -- only used as a rendering helper, and could show a misleading price.
 normaliseMixedAmountSquashPricesForDisplay :: MixedAmount -> MixedAmount
 normaliseMixedAmountSquashPricesForDisplay = normaliseHelper True
 
-tests_normaliseMixedAmountSquashPricesForDisplay = [
-  "normaliseMixedAmountSquashPricesForDisplay" ~: do
-    normaliseMixedAmountSquashPricesForDisplay (Mixed []) `is` Mixed [nullamt]
-    assertBool "" $ isZeroMixedAmount $ normaliseMixedAmountSquashPricesForDisplay
-      (Mixed [usd 10
-             ,usd 10 @@ eur 7
-             ,usd (-10)
-             ,usd (-10) @@ eur 7
-             ])
- ]
-
 -- | Sum same-commodity amounts in a lossy way, applying the first
 -- price to the result and discarding any other prices. Only used as a
 -- rendering helper.
 sumSimilarAmountsUsingFirstPrice :: [Amount] -> Amount
 sumSimilarAmountsUsingFirstPrice [] = nullamt
-sumSimilarAmountsUsingFirstPrice as = (sum as){aprice=aprice $ head as}
+sumSimilarAmountsUsingFirstPrice as = (sumStrict as){aprice=aprice $ head as}
 
 -- -- | Sum same-commodity amounts. If there were different prices, set
 -- -- the price to a special marker indicating "various". Only used as a
@@ -463,19 +574,37 @@ filterMixedAmountByCommodity c (Mixed as) = Mixed as'
             []   -> [nullamt{acommodity=c}]
             as'' -> [sum as'']
 
+-- | Apply a transform to a mixed amount's component 'Amount's.
+mapMixedAmount :: (Amount -> Amount) -> MixedAmount -> MixedAmount
+mapMixedAmount f (Mixed as) = Mixed $ map f as
+
 -- | Convert a mixed amount's component amounts to the commodity of their
 -- assigned price, if any.
 costOfMixedAmount :: MixedAmount -> MixedAmount
 costOfMixedAmount (Mixed as) = Mixed $ map costOfAmount as
 
 -- | Divide a mixed amount's quantities by a constant.
-divideMixedAmount :: MixedAmount -> Quantity -> MixedAmount
-divideMixedAmount (Mixed as) d = Mixed $ map (flip divideAmount d) as
+divideMixedAmount :: Quantity -> MixedAmount -> MixedAmount
+divideMixedAmount n = mapMixedAmount (divideAmount n)
+
+-- | Multiply a mixed amount's quantities by a constant.
+multiplyMixedAmount :: Quantity -> MixedAmount -> MixedAmount
+multiplyMixedAmount n = mapMixedAmount (multiplyAmount n)
+
+-- | Divide a mixed amount's quantities (and total prices, if any) by a constant.
+-- The total prices will be kept positive regardless of the multiplier's sign.
+divideMixedAmountAndPrice :: Quantity -> MixedAmount -> MixedAmount
+divideMixedAmountAndPrice n = mapMixedAmount (divideAmountAndPrice n)
+
+-- | Multiply a mixed amount's quantities (and total prices, if any) by a constant.
+-- The total prices will be kept positive regardless of the multiplier's sign.
+multiplyMixedAmountAndPrice :: Quantity -> MixedAmount -> MixedAmount
+multiplyMixedAmountAndPrice n = mapMixedAmount (multiplyAmountAndPrice n)
 
 -- | Calculate the average of some mixed amounts.
 averageMixedAmounts :: [MixedAmount] -> MixedAmount
 averageMixedAmounts [] = 0
-averageMixedAmounts as = sum as `divideMixedAmount` fromIntegral (length as)
+averageMixedAmounts as = fromIntegral (length as) `divideMixedAmount` sum as 
 
 -- | Is this mixed amount negative, if it can be normalised to a single commodity ?
 isNegativeMixedAmount :: MixedAmount -> Maybe Bool
@@ -503,6 +632,10 @@ isReallyZeroMixedAmountCost = isReallyZeroMixedAmount . costOfMixedAmount
 -- mixedAmountEquals a b = amounts a' == amounts b' || (isZeroMixedAmount a' && isZeroMixedAmount b')
 --     where a' = normaliseMixedAmountSquashPricesForDisplay a
 --           b' = normaliseMixedAmountSquashPricesForDisplay b
+
+-- | Given a map of standard amount display styles, apply the appropriate ones to each individual amount.
+styleMixedAmount :: M.Map CommoditySymbol AmountStyle -> MixedAmount -> MixedAmount
+styleMixedAmount styles (Mixed as) = Mixed $ map (styleAmount styles) as 
 
 -- | Get the string representation of a mixed amount, after
 -- normalising it to one amount per commodity. Assumes amounts have
@@ -549,20 +682,43 @@ showMixedAmountDebug m | m == missingmixedamt = "(missing)"
                        | otherwise       = printf "Mixed [%s]" as
     where as = intercalate "\n       " $ map showAmountDebug $ amounts m
 
--- | Get the string representation of a mixed amount, but without
--- any \@ prices.
+-- TODO these and related fns are comically complicated:
+
+-- | Get the string representation of a mixed amount, without showing any transaction prices.
 showMixedAmountWithoutPrice :: MixedAmount -> String
-showMixedAmountWithoutPrice m = concat $ intersperse "\n" $ map showfixedwidth as
-    where
-      (Mixed as) = normaliseMixedAmountSquashPricesForDisplay $ stripPrices m
-      stripPrices (Mixed as) = Mixed $ map stripprice as where stripprice a = a{aprice=NoPrice}
-      width = maximum $ map (length . showAmount) as
-      showfixedwidth = printf (printf "%%%ds" width) . showAmountWithoutPrice
+showMixedAmountWithoutPrice m = intercalate "\n" $ map showamt as
+  where
+    Mixed as = normaliseMixedAmountSquashPricesForDisplay $ mixedAmountStripPrices m
+    showamt = printf (printf "%%%ds" width) . showAmountWithoutPrice
+      where
+        width = maximumDef 0 $ map (length . showAmount) as
+
+-- | Colour version of showMixedAmountWithoutPrice. Any individual Amount
+-- which is negative is wrapped in ANSI codes to make it display in red.
+cshowMixedAmountWithoutPrice :: MixedAmount -> String
+cshowMixedAmountWithoutPrice m = intercalate "\n" $ map showamt as
+  where
+    Mixed as = normaliseMixedAmountSquashPricesForDisplay $ mixedAmountStripPrices m
+    showamt a =
+      (if isNegativeAmount a then color Dull Red else id) $
+      printf (printf "%%%ds" width) $ showAmountWithoutPrice a
+      where
+        width = maximumDef 0 $ map (length . showAmount) as
+
+mixedAmountStripPrices :: MixedAmount -> MixedAmount
+mixedAmountStripPrices (Mixed as) = Mixed $ map (\a -> a{aprice=NoPrice}) as
 
 -- | Get the one-line string representation of a mixed amount, but without
 -- any \@ prices.
 showMixedAmountOneLineWithoutPrice :: MixedAmount -> String
-showMixedAmountOneLineWithoutPrice m = concat $ intersperse ", " $ map showAmountWithoutPrice as
+showMixedAmountOneLineWithoutPrice m = intercalate ", " $ map showAmountWithoutPrice as
+    where
+      (Mixed as) = normaliseMixedAmountSquashPricesForDisplay $ stripPrices m
+      stripPrices (Mixed as) = Mixed $ map stripprice as where stripprice a = a{aprice=NoPrice}
+
+-- | Colour version.
+cshowMixedAmountOneLineWithoutPrice :: MixedAmount -> String
+cshowMixedAmountOneLineWithoutPrice m = intercalate ", " $ map cshowAmountWithoutPrice as
     where
       (Mixed as) = normaliseMixedAmountSquashPricesForDisplay $ stripPrices m
       stripPrices (Mixed as) = Mixed $ map stripprice as where stripprice a = a{aprice=NoPrice}
@@ -571,81 +727,116 @@ showMixedAmountOneLineWithoutPrice m = concat $ intersperse ", " $ map showAmoun
 canonicaliseMixedAmount :: M.Map CommoditySymbol AmountStyle -> MixedAmount -> MixedAmount
 canonicaliseMixedAmount styles (Mixed as) = Mixed $ map (canonicaliseAmount styles) as
 
+mixedAmountValue :: Journal -> Day -> MixedAmount -> MixedAmount
+mixedAmountValue j d (Mixed as) = Mixed $ map (amountValue j d) as
+
+-- | Replace each component amount's TotalPrice, if it has one, with an equivalent UnitPrice.
+-- Has no effect on amounts without one. 
+-- Does Decimal division, might be some rounding/irrational number issues.
+mixedAmountTotalPriceToUnitPrice :: MixedAmount -> MixedAmount
+mixedAmountTotalPriceToUnitPrice (Mixed as) = Mixed $ map amountTotalPriceToUnitPrice as
+
+
 -------------------------------------------------------------------------------
--- misc
+-- tests
 
-tests_Hledger_Data_Amount = TestList $
-     tests_normaliseMixedAmount
-  ++ tests_normaliseMixedAmountSquashPricesForDisplay
-  ++ [
+tests_Amount = tests "Amount" [
+   tests "Amount" [
 
-  -- Amount
-
-   "costOfAmount" ~: do
-    costOfAmount (eur 1) `is` eur 1
-    costOfAmount (eur 2){aprice=UnitPrice $ usd 2} `is` usd 4
-    costOfAmount (eur 1){aprice=TotalPrice $ usd 2} `is` usd 2
-    costOfAmount (eur (-1)){aprice=TotalPrice $ usd 2} `is` usd (-2)
-
-  ,"isZeroAmount" ~: do
-    assertBool "" $ isZeroAmount $ amount
-    assertBool "" $ isZeroAmount $ usd 0
-
-  ,"negating amounts" ~: do
-    let a = usd 1
-    negate a `is` a{aquantity=(-1)}
-    let b = (usd 1){aprice=UnitPrice $ eur 2}
-    negate b `is` b{aquantity=(-1)}
-
-  ,"adding amounts without prices" ~: do
-    let a1 = usd 1.23
-    let a2 = usd (-1.23)
-    let a3 = usd (-1.23)
-    (a1 + a2) `is` usd 0
-    (a1 + a3) `is` usd 0
-    (a2 + a3) `is` usd (-2.46)
-    (a3 + a3) `is` usd (-2.46)
-    sum [a1,a2,a3,-a3] `is` usd 0
-    -- highest precision is preserved
-    let ap1 = usd 1 `withPrecision` 1
-        ap3 = usd 1 `withPrecision` 3
-    (asprecision $ astyle $ sum [ap1,ap3]) `is` 3
-    (asprecision $ astyle $ sum [ap3,ap1]) `is` 3
-    -- adding different commodities assumes conversion rate 1
-    assertBool "" $ isZeroAmount (a1 - eur 1.23)
-
-  ,"showAmount" ~: do
-    showAmount (usd 0 + gbp 0) `is` "0"
-
-  -- MixedAmount
-
-  ,"adding mixed amounts to zero, the commodity and amount style are preserved" ~: do
-    (sum $ map (Mixed . (:[]))
-             [usd 1.25
-             ,usd (-1) `withPrecision` 3
-             ,usd (-0.25)
-             ])
-      `is` Mixed [usd 0 `withPrecision` 3]
-
-  ,"adding mixed amounts with total prices" ~: do
-    (sum $ map (Mixed . (:[]))
-     [usd 1 @@ eur 1
-     ,usd (-2) @@ eur 1
-     ])
-      `is` (Mixed [usd 1 @@ eur 1
-                  ,usd (-2) @@ eur 1
-                  ])
-
-  ,"showMixedAmount" ~: do
-    showMixedAmount (Mixed [usd 1]) `is` "$1.00"
-    showMixedAmount (Mixed [usd 1 `at` eur 2]) `is` "$1.00 @ €2.00"
-    showMixedAmount (Mixed [usd 0]) `is` "0"
-    showMixedAmount (Mixed []) `is` "0"
-    showMixedAmount missingmixedamt `is` ""
-
-  ,"showMixedAmountWithoutPrice" ~: do
-    let a = usd 1 `at` eur 2
-    showMixedAmountWithoutPrice (Mixed [a]) `is` "$1.00"
-    showMixedAmountWithoutPrice (Mixed [a, (-a)]) `is` "0"
+     tests "costOfAmount" [
+       costOfAmount (eur 1) `is` eur 1
+      ,costOfAmount (eur 2){aprice=UnitPrice $ usd 2} `is` usd 4
+      ,costOfAmount (eur 1){aprice=TotalPrice $ usd 2} `is` usd 2
+      ,costOfAmount (eur (-1)){aprice=TotalPrice $ usd 2} `is` usd (-2)
+    ]
+  
+    ,tests "isZeroAmount" [
+       expect $ isZeroAmount amount
+      ,expect $ isZeroAmount $ usd 0
+    ]
+  
+    ,tests "negating amounts" [
+       negate (usd 1) `is` (usd 1){aquantity= -1}
+      ,let b = (usd 1){aprice=UnitPrice $ eur 2} in negate b `is` b{aquantity= -1}
+    ]
+  
+    ,tests "adding amounts without prices" [
+       (usd 1.23 + usd (-1.23)) `is` usd 0
+      ,(usd 1.23 + usd (-1.23)) `is` usd 0
+      ,(usd (-1.23) + usd (-1.23)) `is` usd (-2.46)
+      ,sum [usd 1.23,usd (-1.23),usd (-1.23),-(usd (-1.23))] `is` usd 0
+      -- highest precision is preserved
+      ,asprecision (astyle $ sum [usd 1 `withPrecision` 1, usd 1 `withPrecision` 3]) `is` 3
+      ,asprecision (astyle $ sum [usd 1 `withPrecision` 3, usd 1 `withPrecision` 1]) `is` 3
+      -- adding different commodities assumes conversion rate 1
+      ,expect $ isZeroAmount (usd 1.23 - eur 1.23)
+    ]
+  
+    ,tests "showAmount" [
+      showAmount (usd 0 + gbp 0) `is` "0"
+    ]
 
   ]
+
+  ,tests "MixedAmount" [
+
+     tests "adding mixed amounts to zero, the commodity and amount style are preserved" [
+      sum (map (Mixed . (:[]))
+               [usd 1.25
+               ,usd (-1) `withPrecision` 3
+               ,usd (-0.25)
+               ])
+        `is` Mixed [usd 0 `withPrecision` 3]
+    ]
+  
+    ,tests "adding mixed amounts with total prices" [
+      sum (map (Mixed . (:[]))
+       [usd 1 @@ eur 1
+       ,usd (-2) @@ eur 1
+       ])
+        `is` Mixed [usd 1 @@ eur 1
+                   ,usd (-2) @@ eur 1
+                   ]
+    ]
+  
+    ,tests "showMixedAmount" [
+       showMixedAmount (Mixed [usd 1]) `is` "$1.00"
+      ,showMixedAmount (Mixed [usd 1 `at` eur 2]) `is` "$1.00 @ €2.00"
+      ,showMixedAmount (Mixed [usd 0]) `is` "0"
+      ,showMixedAmount (Mixed []) `is` "0"
+      ,showMixedAmount missingmixedamt `is` ""
+    ]
+  
+    ,tests "showMixedAmountWithoutPrice" $
+      let a = usd 1 `at` eur 2 in 
+    [
+        showMixedAmountWithoutPrice (Mixed [a]) `is` "$1.00"
+       ,showMixedAmountWithoutPrice (Mixed [a, -a]) `is` "0"
+    ]
+  
+    ,tests "normaliseMixedAmount" [
+       test "a missing amount overrides any other amounts" $ 
+        normaliseMixedAmount (Mixed [usd 1, missingamt]) `is` missingmixedamt
+      ,test "unpriced same-commodity amounts are combined" $ 
+        normaliseMixedAmount (Mixed [usd 0, usd 2]) `is` Mixed [usd 2]
+      ,test "amounts with same unit price are combined" $ 
+        normaliseMixedAmount (Mixed [usd 1 `at` eur 1, usd 1 `at` eur 1]) `is` Mixed [usd 2 `at` eur 1]
+      ,test "amounts with different unit prices are not combined" $ 
+        normaliseMixedAmount (Mixed [usd 1 `at` eur 1, usd 1 `at` eur 2]) `is` Mixed [usd 1 `at` eur 1, usd 1 `at` eur 2]
+      ,test "amounts with total prices are not combined" $
+        normaliseMixedAmount (Mixed  [usd 1 @@ eur 1, usd 1 @@ eur 1]) `is` Mixed [usd 1 @@ eur 1, usd 1 @@ eur 1]
+    ]
+  
+    ,tests "normaliseMixedAmountSquashPricesForDisplay" [
+       normaliseMixedAmountSquashPricesForDisplay (Mixed []) `is` Mixed [nullamt]
+      ,expect $ isZeroMixedAmount $ normaliseMixedAmountSquashPricesForDisplay
+        (Mixed [usd 10
+               ,usd 10 @@ eur 7
+               ,usd (-10)
+               ,usd (-10) @@ eur 7
+               ])
+    ]
+
+  ]
+
+ ]

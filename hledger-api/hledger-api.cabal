@@ -1,9 +1,13 @@
--- This file has been generated from package.yaml by hpack version 0.14.0.
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.31.1.
 --
 -- see: https://github.com/sol/hpack
+--
+-- hash: 95f99473489e1d79674ae49a093448c7ab94198bd0ae0854fc090331643f0204
 
 name:           hledger-api
-version:        1.0
+version:        1.13.99
 synopsis:       Web API server for the hledger accounting tool
 description:    This is a simple web API server for hledger data.
                 It comes with a series of simple client-side web app examples.
@@ -20,22 +24,18 @@ homepage:       http://hledger.org
 bug-reports:    http://bugs.hledger.org
 author:         Simon Michael <simon@joyful.com>
 maintainer:     Simon Michael <simon@joyful.com>
-license:        GPL
+license:        GPL-3
 license-file:   LICENSE
+tested-with:    GHC==7.10.3, GHC==8.0.2, GHC==8.2.2, GHC==8.4.3
 build-type:     Simple
-cabal-version:  >= 1.10
-tested-with:    GHC==7.10.3, GHC==8.0
-
 extra-source-files:
-    CHANGES
+    CHANGES.md
+    README
     examples/01.html
     examples/02.html
-    README
-
-data-files:
-    doc/hledger-api.1
-    doc/hledger-api.1.info
-    doc/hledger-api.1.txt
+    hledger-api.1
+    hledger-api.txt
+    hledger-api.info
 
 source-repository head
   type: git
@@ -43,24 +43,27 @@ source-repository head
 
 executable hledger-api
   main-is: hledger-api.hs
+  other-modules:
+      Paths_hledger_api
   ghc-options: -threaded
-  cpp-options: -DVERSION="1.0"
+  cpp-options: -DVERSION="1.13.99"
   build-depends:
-      hledger-lib >= 1.0 && < 1.1
-    , hledger >= 1.0 && < 1.1
-    , base >=4.8 && <5
+      Decimal
     , aeson
+    , base >=4.8 && <4.13
     , bytestring
     , containers
-    , Decimal
+    , data-default >=0.5
     , docopt
     , either
-    , microlens >=0.4 && <0.5
-    , microlens-platform >=0.2.3.1 && <0.4
+    , hledger >=1.13.99 && <1.14
+    , hledger-lib >=1.13.99 && <1.14
+    , microlens >=0.4
+    , microlens-platform >=0.2.3.1
     , safe
-    , servant-server
+    , servant-server >=0.10
     , servant-swagger
-    , swagger2
+    , swagger2 >=2.0
     , text
     , transformers
     , wai

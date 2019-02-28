@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP                 #-}
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE OverloadedStrings   #-}
@@ -16,6 +17,7 @@ import           Control.Monad
 import           Data.Aeson
 import qualified Data.ByteString.Lazy.Char8 as BL8
 import           Data.Decimal
+import           Data.Default
 import qualified Data.Map as M
 import           Data.Proxy
 import           Data.String (fromString)
@@ -35,12 +37,17 @@ import           Text.Printf
 import Hledger.Query
 import Hledger.Cli hiding (Reader, version)
 
-hledgerApiVersion="1.0"
+#ifdef VERSION
+hledgerApiVersion = VERSION
+#else
+hledgerApiVersion = "dev build"
+#endif
 
 -- https://github.com/docopt/docopt.hs#readme
+-- XXX VERSION is "X.Y" and the quotes appear in the output
 doc :: Docopt
 doc = [docopt|
-hledger-api 1.0
+hledger-api VERSION
 
 Serves hledger data and reports as a JSON web API.
 
@@ -50,7 +57,7 @@ Usage:
   hledger-api --swagger
     print API docs in Swagger 2.0 format
   hledger-api --version
-  hledger-api -h|--help|--info
+  hledger-api -h|--help
 
 Options:
   -f --file FILE   use a different input file
@@ -60,10 +67,7 @@ Options:
      --host IPADDR listen on this IP address (default: 127.0.0.1)
   -p --port PORT   listen on this TCP port (default: 8001)
      --version     show version
-  -h               show usage
-     --help        show manual
-     --man         show manual with man
-     --info        show manual with info
+  -h --help        show usage
 |]
 
 swaggerSpec :: Swagger
@@ -76,11 +80,8 @@ swaggerSpec = toSwagger (Proxy :: Proxy HledgerApi)
 main :: IO ()
 main = do
   args <- getArgs >>= parseArgsOrExit doc
-  when (isPresent args (shortOption 'h')) $ exitWithUsage doc
-  when (isPresent args (longOption "help")) $ printHelpForTopic "api" >> exitSuccess
-  when (isPresent args (longOption "man"))  $ runManForTopic "api" >> exitSuccess
-  when (isPresent args (longOption "info")) $ runInfoForTopic "api" >> exitSuccess
-  when (isPresent args (longOption "version")) $ putStrLn hledgerApiVersion >> exitSuccess
+  when (isPresent args (shortOption 'h') || isPresent args (longOption "help")) $ exitWithUsage doc
+  when (isPresent args (longOption "version")) $ putStrLn ("hledger-api " ++ hledgerApiVersion) >> exitSuccess
   when (isPresent args (longOption "swagger")) $ BL8.putStrLn (encode swaggerSpec) >> exitSuccess
   let
     defh = "127.0.0.1"
@@ -95,7 +96,7 @@ main = do
   let
     defd = "."
     d = getArgWithDefault args defd (longOption "static-dir")
-  readJournalFile Nothing Nothing True f >>= either error' (serveApi h p d f)
+  readJournalFile def f >>= either error' (serveApi h p d f)
 
 serveApi :: String -> Int -> FilePath -> FilePath -> Journal -> IO ()
 serveApi h p d f j = do
@@ -147,7 +148,7 @@ hledgerApiApp staticdir j = Servant.serve api server
       :<|> accounttransactionsH
       )
       --
-      :<|> serveDirectory staticdir
+      :<|> serveDirectoryFileServer staticdir
       where
         accountnamesH = return $ journalAccountNames j
         transactionsH = return $ jtxns j
@@ -165,18 +166,59 @@ hledgerApiApp staticdir j = Servant.serve api server
             thisacctq = Acct $ accountNameToAccountRegex a -- includes subs
           return $ accountTransactionsReport ropts j q thisacctq
 
-instance ToJSON ClearedStatus where toJSON = genericToJSON defaultOptions -- avoiding https://github.com/bos/aeson/issues/290
-instance ToJSON GenericSourcePos where toJSON = genericToJSON defaultOptions
-instance ToJSON Decimal where
-  toJSON = toJSON . show
-instance ToJSON Amount where toJSON = genericToJSON defaultOptions
-instance ToJSON AmountStyle where toJSON = genericToJSON defaultOptions
-instance ToJSON Side where toJSON = genericToJSON defaultOptions
-instance ToJSON DigitGroupStyle where toJSON = genericToJSON defaultOptions
-instance ToJSON MixedAmount where toJSON = genericToJSON defaultOptions
-instance ToJSON Price where toJSON = genericToJSON defaultOptions
-instance ToJSON MarketPrice where toJSON = genericToJSON defaultOptions
-instance ToJSON PostingType where toJSON = genericToJSON defaultOptions
+-- avoiding https://github.com/bos/aeson/issues/290 - no longer needed ?
+--instance ToJSON Status where toJSON = genericToJSON defaultOptions -- avoiding https://github.com/bos/aeson/issues/290
+--instance ToJSON GenericSourcePos where toJSON = genericToJSON defaultOptions
+--instance ToJSON Decimal where toJSON = toJSON . show
+--instance ToJSON Amount where toJSON = genericToJSON defaultOptions
+--instance ToJSON AmountStyle where toJSON = genericToJSON defaultOptions
+--instance ToJSON Side where toJSON = genericToJSON defaultOptions
+--instance ToJSON DigitGroupStyle where toJSON = genericToJSON defaultOptions
+--instance ToJSON MixedAmount where toJSON = genericToJSON defaultOptions
+--instance ToJSON BalanceAssertion where toJSON = genericToJSON defaultOptions
+--instance ToJSON Price where toJSON = genericToJSON defaultOptions
+--instance ToJSON MarketPrice where toJSON = genericToJSON defaultOptions
+--instance ToJSON PostingType where toJSON = genericToJSON defaultOptions
+--instance ToJSON Posting where
+--  toJSON Posting{..} =
+--    object
+--    ["pdate"             .= toJSON pdate
+--    ,"pdate2"            .= toJSON pdate2
+--    ,"pstatus"           .= toJSON pstatus
+--    ,"paccount"          .= toJSON paccount
+--    ,"pamount"           .= toJSON pamount
+--    ,"pcomment"          .= toJSON pcomment
+--    ,"ptype"             .= toJSON ptype
+--    ,"ptags"             .= toJSON ptags
+--    ,"pbalanceassertion" .= toJSON pbalanceassertion
+--    ,"ptransactionidx"   .= toJSON (maybe "" (show.tindex) ptransaction)
+--    ]
+--instance ToJSON Transaction where toJSON = genericToJSON defaultOptions
+--instance ToJSON Account where
+--  toJSON a =
+--    object
+--    ["aname"        .= toJSON (aname a)
+--    ,"aebalance"    .= toJSON (aebalance a)
+--    ,"aibalance"    .= toJSON (aibalance a)
+--    ,"anumpostings" .= toJSON (anumpostings a)
+--    ,"aboring"      .= toJSON (aboring a)
+--    ,"aparentname"  .= toJSON (maybe "" aname $ aparent a)
+--    ,"asubs"        .= toJSON (map toJSON $ asubs a)
+--    ]
+
+-- Convert things to JSON for serving to clients
+instance ToJSON Status
+instance ToJSON GenericSourcePos
+instance ToJSON Decimal where toJSON = toJSON . show
+instance ToJSON Amount
+instance ToJSON AmountStyle
+instance ToJSON Side
+instance ToJSON DigitGroupStyle
+instance ToJSON MixedAmount
+instance ToJSON BalanceAssertion
+instance ToJSON Price
+instance ToJSON MarketPrice
+instance ToJSON PostingType
 instance ToJSON Posting where
   toJSON Posting{..} =
     object
@@ -191,7 +233,7 @@ instance ToJSON Posting where
     ,"pbalanceassertion" .= toJSON pbalanceassertion
     ,"ptransactionidx"   .= toJSON (maybe "" (show.tindex) ptransaction)
     ]
-instance ToJSON Transaction where toJSON = genericToJSON defaultOptions
+instance ToJSON Transaction
 instance ToJSON Account where
   toJSON a =
     object
@@ -203,7 +245,9 @@ instance ToJSON Account where
     ,"aparentname"  .= toJSON (maybe "" aname $ aparent a)
     ,"asubs"        .= toJSON (map toJSON $ asubs a)
     ]
-instance ToSchema ClearedStatus
+
+-- convert things to Schema for swagger API description
+instance ToSchema Status
 instance ToSchema GenericSourcePos
 instance ToSchema Decimal
  where
@@ -217,10 +261,15 @@ instance ToSchema AmountStyle
 instance ToSchema Side
 instance ToSchema DigitGroupStyle
 instance ToSchema MixedAmount
+instance ToSchema BalanceAssertion
 instance ToSchema Price
+#if MIN_VERSION_swagger2(2,1,5)
+  where declareNamedSchema = genericDeclareNamedSchemaUnrestricted defaultSchemaOptions
+#endif
 instance ToSchema MarketPrice
 instance ToSchema PostingType
 instance ToSchema Posting
 instance ToSchema Transaction
 instance ToSchema Account
+instance ToSchema AccountDeclarationInfo
 -- instance ToSchema AccountTransactionsReport

@@ -3,20 +3,22 @@ hledger-ui - a hledger add-on providing a curses-style interface.
 Copyright (c) 2007-2015 Simon Michael <simon@joyful.com>
 Released under GPL version 3 or later.
 -}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
 module Hledger.UI.Main where
 
 -- import Control.Applicative
 -- import Lens.Micro.Platform ((^.))
-import Control.Concurrent
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async
 import Control.Monad
 -- import Control.Monad.IO.Class (liftIO)
+#if !MIN_VERSION_vty(5,15,0)
 import Data.Default (def)
--- import Data.Monoid              -- 
+#endif
+-- import Data.Monoid              --
 import Data.List
 import Data.Maybe
 -- import Data.Text (Text)
@@ -30,8 +32,14 @@ import System.FilePath
 import System.FSNotify
 import Brick
 
+#if MIN_VERSION_brick(0,16,0)
+import qualified Brick.BChan as BC
+#else
+import Control.Concurrent.Chan (newChan, writeChan)
+#endif
+
 import Hledger
-import Hledger.Cli hiding (progname,prognameandversion,green)
+import Hledger.Cli hiding (progname,prognameandversion)
 import Hledger.UI.UIOptions
 import Hledger.UI.UITypes
 import Hledger.UI.UIState (toggleHistorical)
@@ -41,6 +49,15 @@ import Hledger.UI.RegisterScreen
 
 ----------------------------------------------------------------------
 
+#if MIN_VERSION_brick(0,16,0)
+newChan :: IO (BC.BChan a)
+newChan = BC.newBChan 10
+
+writeChan :: BC.BChan a -> a -> IO ()
+writeChan = BC.writeBChan
+#endif
+
+
 main :: IO ()
 main = do
   opts <- getHledgerUIOpts
@@ -48,24 +65,27 @@ main = do
   run opts
     where
       run opts
-        | "h"               `inRawOpts` (rawopts_ $ cliopts_ opts) = putStr (showModeUsage uimode) >> exitSuccess
-        | "help"            `inRawOpts` (rawopts_ $ cliopts_ opts) = printHelpForTopic (topicForMode uimode) >> exitSuccess
-        | "man"             `inRawOpts` (rawopts_ $ cliopts_ opts) = runManForTopic (topicForMode uimode) >> exitSuccess
-        | "info"            `inRawOpts` (rawopts_ $ cliopts_ opts) = runInfoForTopic (topicForMode uimode) >> exitSuccess
+        | "help"            `inRawOpts` (rawopts_ $ cliopts_ opts) = putStr (showModeUsage uimode) >> exitSuccess
         | "version"         `inRawOpts` (rawopts_ $ cliopts_ opts) = putStrLn prognameandversion >> exitSuccess
         | "binary-filename" `inRawOpts` (rawopts_ $ cliopts_ opts) = putStrLn (binaryfilename progname)
         | otherwise                                                = withJournalDoUICommand opts runBrickUi
 
--- XXX withJournalDo specialised for UIOpts
+-- TODO fix nasty duplication of withJournalDo
+-- | hledger-ui's version of withJournalDo, which turns on --auto and --forecast.
 withJournalDoUICommand :: UIOpts -> (UIOpts -> Journal -> IO ()) -> IO ()
-withJournalDoUICommand uopts@UIOpts{cliopts_=copts} cmd = do
-  rulespath <- rulesFilePathFromOpts copts
-  journalpath <- journalFilePathFromOpts copts
-  ej <- readJournalFiles Nothing rulespath (not $ ignore_assertions_ copts) journalpath
-  either error' (cmd uopts . journalApplyAliases (aliasesFromOpts copts)) ej
+withJournalDoUICommand uopts@UIOpts{cliopts_=copts@CliOpts{inputopts_=iopts,reportopts_=ropts}} cmd = do
+  let copts' = copts{inputopts_=iopts{auto_=True}, reportopts_=ropts{forecast_=True}}
+  journalpath <- journalFilePathFromOpts copts'
+  ej <- readJournalFiles (inputopts_ copts') journalpath
+  let fn = cmd uopts
+         . pivotByOpts copts'
+         . anonymiseByOpts copts'
+       <=< journalApplyValue (reportopts_ copts')
+       <=< journalAddForecast copts'
+  either error' fn ej
 
 runBrickUi :: UIOpts -> Journal -> IO ()
-runBrickUi uopts@UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}} j = do
+runBrickUi uopts@UIOpts{cliopts_=copts@CliOpts{inputopts_=_iopts,reportopts_=ropts}} j = do
   d <- getCurrentDay
 
   let
@@ -88,8 +108,8 @@ runBrickUi uopts@UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}} j = do
                     [v | (k,v) <- rawopts_ copts, k=="args", not $ any (`isPrefixOf` v) ["depth","date"]],
             -- always disable boring account name eliding, unlike the CLI, for a more regular tree
             no_elide_=True,
-            -- show items with zero amount by default, unlike the CLI
-            empty_=True,
+            -- flip the default for items with zero amounts, show them by default
+            empty_=not $ empty_ ropts,
             -- show historical balances by default, unlike the CLI
             balancetype_=HistoricalBalance
             }
@@ -121,27 +141,27 @@ runBrickUi uopts@UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}} j = do
           -- Initialising the accounts screen is awkward, requiring
           -- another temporary UIState value..
           ascr' = aScreen $
-                  asInit d True $
-                  UIState{
-                    aopts=uopts'
-                   ,ajournal=j
-                   ,aScreen=asSetSelectedAccount acct accountsScreen
-                   ,aPrevScreens=[]
-                   ,aMode=Normal
-                   }
-  
+                  asInit d True
+                    UIState{
+                      aopts=uopts'
+                    ,ajournal=j
+                    ,aScreen=asSetSelectedAccount acct accountsScreen
+                    ,aPrevScreens=[]
+                    ,aMode=Normal
+                    }
+
     ui =
       (sInit scr) d True $
-        (if change_ uopts' then toggleHistorical else id) $ -- XXX
-        UIState{
-          aopts=uopts'
-         ,ajournal=j
-         ,aScreen=scr
-         ,aPrevScreens=prevscrs
-         ,aMode=Normal
-         }
+        (if change_ uopts' then toggleHistorical else id) -- XXX
+          UIState{
+            aopts=uopts'
+          ,ajournal=j
+          ,aScreen=scr
+          ,aPrevScreens=prevscrs
+          ,aMode=Normal
+          }
 
-    brickapp :: App (UIState) AppEvent Name
+    brickapp :: App UIState AppEvent Name
     brickapp = App {
         appStartEvent   = return
       , appAttrMap      = const theme
@@ -150,6 +170,8 @@ runBrickUi uopts@UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}} j = do
       , appDraw         = \ui    -> sDraw   (aScreen ui) ui
       }
 
+  -- print (length (show ui)) >> exitSuccess  -- show any debug output to this point & quit
+  
   if not (watch_ uopts')
   then
     void $ defaultMain brickapp ui
@@ -162,25 +184,29 @@ runBrickUi uopts@UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}} j = do
     -- use async for proper child termination in GHCI
     let
       watchDate old = do
-        threadDelay 1000000 -- 1s
+        threadDelay 1000000 -- 1 s
         new <- getCurrentDay
         when (new /= old) $ do
           let dc = DateChange old new
           -- dbg1IO "datechange" dc -- XXX don't uncomment until dbg*IO fixed to use traceIO, GHC may block/end thread
+          -- traceIO $ show dc
           writeChan eventChan dc
         watchDate new
 
     withAsync
       (getCurrentDay >>= watchDate)
-      $ \_ -> do
+      $ \_ ->
 
       -- start one or more background threads reporting changes in the directories of our files
-      -- XXX misses quick successive saves (still ? hard to reproduce now)
-      -- XXX then refuses to reload manually (should be fixed now ?)
-      --   withManagerConf defaultConfig{confDebounce=Debounce 1000} $ \mgr -> do
+      -- XXX many quick successive saves causes the problems listed in BUGS
+      -- with Debounce increased to 1s it easily gets stuck on an error or blank screen
+      -- until you press g, but it becomes responsive again quickly.
+      -- withManagerConf defaultConfig{confDebounce=Debounce 1} $ \mgr -> do
+      -- with Debounce at the default 1ms it clears transient errors itself
+      -- but gets tied up for ages
       withManager $ \mgr -> do
         dbg1IO "fsnotify using polling ?" $ isPollingManager mgr
-        files <- mapM canonicalizePath $ map fst $ jfiles j
+        files <- mapM (canonicalizePath . fst) $ jfiles j
         let directories = nub $ sort $ map takeDirectory files
         dbg1IO "files" files
         dbg1IO "directories to watch" directories
@@ -190,20 +216,30 @@ runBrickUi uopts@UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}} j = do
           d
           -- predicate: ignore changes not involving our files
           (\fev -> case fev of
-            Added    f _ -> f `elem` files
-            Modified f _ -> f `elem` files
-            Removed  f _ -> f `elem` files
+#if MIN_VERSION_fsnotify(0,3,0)
+            Modified f _ False
+#else
+            Modified f _
+#endif
+                               -> f `elem` files
+            -- Added    f _ -> f `elem` files
+            -- Removed  f _ -> f `elem` files
+            -- we don't handle adding/removing journal files right now
+            -- and there might be some of those events from tmp files
+            -- clogging things up so let's ignore them
+            _ -> False
             )
           -- action: send event to app
           (\fev -> do
             -- return $ dbglog "fsnotify" $ showFSNEvent fev -- not working
-            dbg1IO "fsnotify" $ showFSNEvent fev
+            dbg1IO "fsnotify" $ show fev
             writeChan eventChan FileChange
             )
 
         -- and start the app. Must be inside the withManager block
-        void $ customMain (mkVty def) (Just eventChan) brickapp ui
-
-showFSNEvent (Added    f _) = "Added "    ++ show f
-showFSNEvent (Modified f _) = "Modified " ++ show f
-showFSNEvent (Removed  f _) = "Removed "  ++ show f
+#if MIN_VERSION_vty(5,15,0)
+        let myVty = mkVty mempty
+#else
+        let myVty = mkVty def
+#endif
+        void $ customMain myVty (Just eventChan) brickapp ui

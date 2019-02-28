@@ -1,18 +1,36 @@
 #!/usr/bin/env runghc
 -- dev.hs, for miscellaneous profiling/benchmarking/testing.
 
--- {-# LANGUAGE DeriveDataTypeable, StandaloneDeriving, DeriveGeneric #-}
--- {-# LANGUAGE NoWarnUnusedImports #-}
+--{-# LANGUAGE CPP                 #-}
+--{-# LANGUAGE DataKinds           #-}
+--{-# LANGUAGE DeriveDataTypeable  #-}
+--{-# LANGUAGE DeriveGeneric       #-}
+--{-# LANGUAGE FlexibleContexts #-}
+--{-# LANGUAGE FlexibleInstances   #-}
+--{-# LANGUAGE NamedFieldPuns #-}
+--{-# LANGUAGE NoWarnUnusedImports #-}
+--{-# LANGUAGE OverloadedStrings   #-}
+--{-# LANGUAGE OverloadedStrings #-}
+--{-# LANGUAGE PolyKinds           #-}
+--{-# LANGUAGE QuasiQuotes         #-}
+--{-# LANGUAGE QuasiQuotes #-}
+--{-# LANGUAGE RecordWildCards #-}
+--{-# LANGUAGE ScopedTypeVariables #-}
+--{-# LANGUAGE StandaloneDeriving  #-}
+--{-# LANGUAGE TypeFamilies        #-}
+--{-# LANGUAGE TypeOperators       #-}
 
 -- import System.Environment (getArgs)
 -- import Control.Monad.Except
 import Criterion.Main
 -- import Data.Text.Lazy as LT
+import qualified Data.Text as T
 -- import System.Environment
 import System.TimeIt      (timeItT)
 import Text.Printf
 
 import Hledger
+import Data.Default (def)
 -- import Hledger.Utils.Regex (toRegexCI)
 -- import Hledger.Utils.Debug
 -- import qualified Hledger.Read.JournalReader as JR
@@ -33,10 +51,10 @@ import Hledger
 -- instance NFData Regex
 
 journal =
-  -- "data/10000x1000x10.journal"
-  "data/10000x1000x10.journal"
+  -- "examples/10000x1000x10.journal"
+  "examples/10000x1000x10.journal"
 
-timeclock = "data/sample.timeclock"
+timeclock = "examples/sample.timeclock"
 
 timeit :: String -> IO a -> IO (Double, a)
 timeit name action = do
@@ -45,19 +63,16 @@ timeit name action = do
   printf "[%.2fs]\n" t
   return (t,a)
 
-timeReadJournal :: String -> String -> IO (Double, Journal)
-timeReadJournal msg s = timeit msg $ either error id <$> readJournal Nothing Nothing True Nothing s
-
 main = do
   -- putStrLn $ regexReplaceCI "^aa" "xx" "aa:bb:cc:dd:ee"
 
-  (_t0,_j) <- timeit ("read "++journal) $ either error id <$> readJournalFile Nothing Nothing True journal
+  (_t0,_j) <- timeit ("read "++journal) $ either error id <$> readJournalFile def journal
   return ()
   -- printf "Total: %0.2fs\n" (sum [t0,t1,t2,t3,t4])
 
   -- -- read the input journal
   -- s <- readFile journal
-  -- j <- either error id <$> readJournal Nothing Nothing True Nothing s
+  -- j <- either error id <$> readJournal def Nothing s
   -- -- putStrLn $ show $ length $ jtxns j -- sanity check we parsed it all
   -- let accts = map paccount $ journalPostings j
 
@@ -82,10 +97,10 @@ main = do
 
   --   -- ,bench ("readJournal") $ whnfIO $
   --   --    either error id <$>
-  --   --    readJournal Nothing Nothing True Nothing s
+  --   --    readJournal def Nothing s
   --   -- ,bench ("readJournal with aliases") $ whnfIO $
   --   --    either error id <$>
-  --   --    readJournal Nothing Nothing True Nothing (
+  --   --    readJournal def Nothing (
   --   --      unlines [
   --   --         "alias /^fb:/=xx \n"
   --   --         ,"alias /^f1:/=xx \n"
@@ -131,6 +146,9 @@ main = do
 
   -- return ()
 
+--timeReadJournal :: String -> T.Text -> IO (Double, Journal)
+--timeReadJournal msg s = timeit msg $ either error id <$> readJournal def Nothing s
+
   -- benchmark timeclock parsing
   -- s <- readFile inputtimeclock
   -- putStrLn $ show $ length s
@@ -156,7 +174,7 @@ main = do
 -- benchWithTimeit = do
 --   getCurrentDirectory >>= printf "Benchmarking hledger in %s with timeit\n"
 --   let opts = defcliopts{output_file_=Just outputfile}
---   (t0,j) <- timeit ("read "++inputfile) $ either error id <$> readJournalFile Nothing Nothing True inputfile
+--   (t0,j) <- timeit ("read "++inputfile) $ either error id <$> readJournalFile def inputfile
 --   (t1,_) <- timeit ("print") $ print' opts j
 --   (t2,_) <- timeit ("register") $ register opts j
 --   (t3,_) <- timeit ("balance") $ balance  opts j

@@ -1,14 +1,12 @@
 -- bench
 -- By default, show approximate times for some standard hledger operations on a sample journal.
 -- With --criterion, show accurate times (slow).
--- TODO With --quickbench, show approximate times for the commands in default.bench, using the first hledger executable on $PATH.
 
 import Criterion.Main     (defaultMainWith, defaultConfig, bench, nfIO)
 -- import QuickBench        (defaultMain)
+import Data.Default
 import System.Directory   (getCurrentDirectory)
 import System.Environment (getArgs, withArgs)
-import System.Info        (os)
-import System.Process     (readProcess)
 import System.TimeIt      (timeItT)
 import Text.Printf
 import Hledger.Cli
@@ -36,7 +34,7 @@ main = do
 benchWithTimeit = do
   getCurrentDirectory >>= printf "Benchmarking hledger in %s with timeit\n"
   let opts = defcliopts{output_file_=Just outputfile}
-  (t0,j) <- timeit ("read "++inputfile) $ either error id <$> readJournalFile Nothing Nothing True inputfile
+  (t0,j) <- timeit ("read "++inputfile) $ either error id <$> readJournalFile def inputfile
   (t1,_) <- timeit ("print") $ print' opts j
   (t2,_) <- timeit ("register") $ register opts j
   (t3,_) <- timeit ("balance") $ balance  opts j
@@ -52,22 +50,11 @@ timeit name action = do
 benchWithCriterion = do
   getCurrentDirectory >>= printf "Benchmarking hledger in %s with criterion\n"
   let opts = defcliopts{output_file_=Just "/dev/null"}
-  j <- either error id <$> readJournalFile Nothing Nothing True inputfile
+  j <- either error id <$> readJournalFile def inputfile
   Criterion.Main.defaultMainWith defaultConfig $ [
-    bench ("read "++inputfile) $ nfIO $ (either error const <$> readJournalFile Nothing Nothing True inputfile),
+    bench ("read "++inputfile) $ nfIO $ (either error const <$> readJournalFile def inputfile),
     bench ("print")            $ nfIO $ print'   opts j,
     bench ("register")         $ nfIO $ register opts j,
     bench ("balance")          $ nfIO $ balance  opts j,
     bench ("stats")            $ nfIO $ stats    opts j
     ]
-
--- benchWithQuickbench = do
---   let whichcmd = if os == "mingw32" then "where" else "which"
---   exe <- init <$> readProcess whichcmd ["hledger"] ""
---   pwd <- getCurrentDirectory
---   printf "Benchmarking %s in %s with quickbench and shell\n" exe pwd
---   flip withArgs QuickBench.defaultMain [
---      "-fbench/default.bench"
---     ,"-v"
---     ,"hledger"
---     ]

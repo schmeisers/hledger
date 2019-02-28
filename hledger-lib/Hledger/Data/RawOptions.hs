@@ -18,7 +18,7 @@ module Hledger.Data.RawOptions (
   listofstringopt,
   intopt,
   maybeintopt,
-  optserror
+  maybecharopt
 )
 where
 
@@ -46,10 +46,13 @@ boolopt :: String -> RawOpts -> Bool
 boolopt = inRawOpts
 
 maybestringopt :: String -> RawOpts -> Maybe String
-maybestringopt name = maybe Nothing (Just . T.unpack . stripquotes . T.pack) . lookup name . reverse
+maybestringopt name = fmap (T.unpack . stripquotes . T.pack) . lookup name . reverse
 
 stringopt :: String -> RawOpts -> String
 stringopt name = fromMaybe "" . maybestringopt name
+
+maybecharopt :: String -> RawOpts -> Maybe Char
+maybecharopt name rawopts = lookup name rawopts >>= headMay
 
 listofstringopt :: String -> RawOpts -> [String]
 listofstringopt name rawopts = [v | (k,v) <- rawopts, k==name]
@@ -58,12 +61,8 @@ maybeintopt :: String -> RawOpts -> Maybe Int
 maybeintopt name rawopts =
     let ms = maybestringopt name rawopts in
     case ms of Nothing -> Nothing
-               Just s -> Just $ readDef (optserror $ "could not parse "++name++" number: "++s) s
+               Just s -> Just $ readDef (usageError $ "could not parse "++name++" number: "++s) s
 
 intopt :: String -> RawOpts -> Int
 intopt name = fromMaybe 0 . maybeintopt name
-
--- | Raise an error, showing the specified message plus a hint about --help.
-optserror :: String -> a
-optserror = error' . (++ " (run with --help for usage)")
 

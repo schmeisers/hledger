@@ -16,12 +16,11 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' --no-total
 >>>
 Balance changes in 2013q1:
 
-                 ||  2013/01  2013/02  2013/03 
-=================++============================
- assets          ||        0        1        0 
- assets:cash     ||        0        1        0 
- assets:checking ||        0        0        1 
-
+                 || Jan  Feb  Mar 
+=================++===============
+ assets          ||   0    1    0 
+ assets:cash     ||   0    1    0 
+ assets:checking ||   0    0    1 
 >>>=0
 
 # 3. With --empty, includes leading/trailing empty periods
@@ -37,12 +36,11 @@ hledger -f - balance -p 'quarterly in 2013' --empty
 >>>
 Balance changes in 2013:
 
-   ||  2013q1  2013q2  2013q3  2013q4 
-===++=================================
- a ||       2       0       0       0 
----++---------------------------------
-   ||       2       0       0       0 
-
+   || 2013q1  2013q2  2013q3  2013q4 
+===++================================
+ a ||      2       0       0       0 
+---++--------------------------------
+   ||      2       0       0       0 
 >>>=0
 
 # 4. A cumulative ending balance report. Column totals are the sum of
@@ -51,14 +49,13 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' --cumulative
 >>>
 Ending balances (cumulative) in 2013q1:
 
-                 ||  2013/01/31  2013/02/28  2013/03/31 
-=================++=====================================
- assets          ||           0           1           1 
- assets:cash     ||           0           1           1 
- assets:checking ||           0           0           1 
------------------++-------------------------------------
-                 ||           0           2           3 
-
+                 || 2013/01/31  2013/02/28  2013/03/31 
+=================++====================================
+ assets          ||          0           1           1 
+ assets:cash     ||          0           1           1 
+ assets:checking ||          0           0           1 
+-----------------++------------------------------------
+                 ||          0           2           3 
 >>>=0
 
 # 5. With the assets:cash account excluded.  As with a single-column
@@ -68,13 +65,12 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' --cumulative no
 >>>
 Ending balances (cumulative) in 2013q1:
 
-                 ||  2013/01/31  2013/02/28  2013/03/31 
-=================++=====================================
- assets          ||           0           1           1 
- assets:checking ||           0           0           1 
------------------++-------------------------------------
-                 ||           0           1           2 
-
+                 || 2013/01/31  2013/02/28  2013/03/31 
+=================++====================================
+ assets          ||          0           1           1 
+ assets:checking ||          0           0           1 
+-----------------++------------------------------------
+                 ||          0           1           2 
 >>>=0
 
 # 6. A historical ending balance report.
@@ -82,14 +78,13 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' --historical
 >>>
 Ending balances (historical) in 2013q1:
 
-                 ||  2013/01/31  2013/02/28  2013/03/31 
-=================++=====================================
- assets          ||           0           1           1 
- assets:cash     ||           0           1           1 
- assets:checking ||          10          10          11 
------------------++-------------------------------------
-                 ||          10          12          13 
-
+                 || 2013/01/31  2013/02/28  2013/03/31 
+=================++====================================
+ assets          ||          0           1           1 
+ assets:cash     ||          0           1           1 
+ assets:checking ||         10          10          11 
+-----------------++------------------------------------
+                 ||         10          12          13 
 >>>=0
 
 # 7. With top-level accounts excluded. As always, column totals are the sum of
@@ -98,13 +93,12 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' not:assets$
 >>>
 Balance changes in 2013q1:
 
-                 ||  2013/01  2013/02  2013/03 
-=================++============================
- assets:cash     ||        0        1        0 
- assets:checking ||        0        0        1 
------------------++----------------------------
-                 ||        0        1        1 
-
+                 || Jan  Feb  Mar 
+=================++===============
+ assets:cash     ||   0    1    0 
+ assets:checking ||   0    0    1 
+-----------------++---------------
+                 ||   0    1    1 
 >>>=0
 
 # 8. cumulative:
@@ -112,13 +106,12 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' not:assets$ --c
 >>>
 Ending balances (cumulative) in 2013q1:
 
-                 ||  2013/01/31  2013/02/28  2013/03/31 
-=================++=====================================
- assets:cash     ||           0           1           1 
- assets:checking ||           0           0           1 
------------------++-------------------------------------
-                 ||           0           1           2 
-
+                 || 2013/01/31  2013/02/28  2013/03/31 
+=================++====================================
+ assets:cash     ||          0           1           1 
+ assets:checking ||          0           0           1 
+-----------------++------------------------------------
+                 ||          0           1           2 
 >>>=0
 
 # 9. historical
@@ -126,14 +119,13 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' --historical
 >>>
 Ending balances (historical) in 2013q1:
 
-                 ||  2013/01/31  2013/02/28  2013/03/31 
-=================++=====================================
- assets          ||           0           1           1 
- assets:cash     ||           0           1           1 
- assets:checking ||          10          10          11 
------------------++-------------------------------------
-                 ||          10          12          13 
-
+                 || 2013/01/31  2013/02/28  2013/03/31 
+=================++====================================
+ assets          ||          0           1           1 
+ assets:cash     ||          0           1           1 
+ assets:checking ||         10          10          11 
+-----------------++------------------------------------
+                 ||         10          12          13 
 >>>=0
 
 # --depth
@@ -143,12 +135,11 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' --depth 1
 >>>
 Balance changes in 2013q1:
 
-        ||  2013/01  2013/02  2013/03 
-========++============================
- assets ||        0        2        1 
---------++----------------------------
-        ||        0        2        1 
-
+        || Jan  Feb  Mar 
+========++===============
+ assets ||   0    2    1 
+--------++---------------
+        ||   0    2    1 
 >>>=0
 
 # 11. As above, but postings in the top-level assets account have been excluded.
@@ -156,12 +147,11 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' --depth 1 asset
 >>>
 Balance changes in 2013q1:
 
-        ||  2013/01  2013/02  2013/03 
-========++============================
- assets ||        0        1        1 
---------++----------------------------
-        ||        0        1        1 
-
+        || Jan  Feb  Mar 
+========++===============
+ assets ||   0    1    1 
+--------++---------------
+        ||   0    1    1 
 >>>=0
 
 # 12. A cumulative balance report with depth limiting.
@@ -169,12 +159,11 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' --depth 1 --cum
 >>>
 Ending balances (cumulative) in 2013q1:
 
-        ||  2013/01/31  2013/02/28  2013/03/31 
-========++=====================================
- assets ||           0           2           3 
---------++-------------------------------------
-        ||           0           2           3 
-
+        || 2013/01/31  2013/02/28  2013/03/31 
+========++====================================
+ assets ||          0           2           3 
+--------++------------------------------------
+        ||          0           2           3 
 >>>=0
 
 # 13. A historical balance report with depth limiting.
@@ -182,12 +171,11 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' --depth 1 --his
 >>>
 Ending balances (historical) in 2013q1:
 
-        ||  2013/01/31  2013/02/28  2013/03/31 
-========++=====================================
- assets ||          10          12          13 
---------++-------------------------------------
-        ||          10          12          13 
-
+        || 2013/01/31  2013/02/28  2013/03/31 
+========++====================================
+ assets ||         10          12          13 
+--------++------------------------------------
+        ||         10          12          13 
 >>>=0
 
 # 14. The three multicol balance report types again, this time with --tree
@@ -195,14 +183,13 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' --tree
 >>>
 Balance changes in 2013q1:
 
-            ||  2013/01  2013/02  2013/03 
-============++============================
- assets     ||        0        2        1 
-   cash     ||        0        1        0 
-   checking ||        0        0        1 
-------------++----------------------------
-            ||        0        2        1 
-
+            || Jan  Feb  Mar 
+============++===============
+ assets     ||   0    2    1 
+   cash     ||   0    1    0 
+   checking ||   0    0    1 
+------------++---------------
+            ||   0    2    1 
 >>>=0
 
 # 15.
@@ -210,14 +197,13 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' --cumulative --
 >>>
 Ending balances (cumulative) in 2013q1:
 
-            ||  2013/01/31  2013/02/28  2013/03/31 
-============++=====================================
- assets     ||           0           2           3 
-   cash     ||           0           1           1 
-   checking ||           0           0           1 
-------------++-------------------------------------
-            ||           0           2           3 
-
+            || 2013/01/31  2013/02/28  2013/03/31 
+============++====================================
+ assets     ||          0           2           3 
+   cash     ||          0           1           1 
+   checking ||          0           0           1 
+------------++------------------------------------
+            ||          0           2           3 
 >>>=0
 
 # 16.
@@ -225,14 +211,13 @@ hledger -f balance-multicol.journal balance -p 'monthly in 2013' --historical --
 >>>
 Ending balances (historical) in 2013q1:
 
-            ||  2013/01/31  2013/02/28  2013/03/31 
-============++=====================================
- assets     ||          10          12          13 
-   cash     ||           0           1           1 
-   checking ||          10          10          11 
-------------++-------------------------------------
-            ||          10          12          13 
-
+            || 2013/01/31  2013/02/28  2013/03/31 
+============++====================================
+ assets     ||         10          12          13 
+   cash     ||          0           1           1 
+   checking ||         10          10          11 
+------------++------------------------------------
+            ||         10          12          13 
 >>>=0
 
 # 17. --date2 should work
@@ -247,13 +232,12 @@ hledger -f- balance --monthly --date2
 >>>
 Balance changes in 2014/01:
 
-   ||  2014/01 
-===++==========
- a ||        1 
- b ||        1 
----++----------
-   ||        2 
-
+   || Jan 
+===++=====
+ a ||   1 
+ b ||   1 
+---++-----
+   ||   2 
 >>>=0
 
 # 18. All matched postings in the displayed intervals should be reported on.
@@ -271,12 +255,11 @@ hledger -f- balance -p 'monthly 2014/1/10-2014/2/20'
 >>>
 Balance changes in 2014/01/01-2014/02/28:
 
-        ||  2014/01  2014/02 
-========++===================
- after  ||        0        1 
- before ||        1        0 
- within ||        0        1 
---------++-------------------
-        ||        1        2 
-
+        || Jan  Feb 
+========++==========
+ after  ||   0    1 
+ before ||   1    0 
+ within ||   0    1 
+--------++----------
+        ||   1    2 
 >>>=0

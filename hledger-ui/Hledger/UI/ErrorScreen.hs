@@ -1,6 +1,7 @@
 -- The error screen, showing a current error condition (such as a parse error after reloading the journal)
 
 {-# LANGUAGE OverloadedStrings, FlexibleContexts, RecordWildCards #-}
+{-# LANGUAGE CPP #-}
 
 module Hledger.UI.ErrorScreen
  (errorScreen
@@ -11,15 +12,19 @@ module Hledger.UI.ErrorScreen
 where
 
 import Brick
--- import Brick.Widgets.Border (borderAttr)
+-- import Brick.Widgets.Border ("border")
 import Control.Monad
 import Control.Monad.IO.Class (liftIO)
+#if !(MIN_VERSION_base(4,11,0))
 import Data.Monoid
+#endif
 import Data.Time.Calendar (Day)
-import Graphics.Vty (Event(..),Key(..))
+import Data.Void (Void)
+import Graphics.Vty (Event(..),Key(..),Modifier(..))
 import Text.Megaparsec
+import Text.Megaparsec.Char
 
-import Hledger.Cli hiding (progname,prognameandversion,green)
+import Hledger.Cli hiding (progname,prognameandversion)
 import Hledger.UI.UIOptions
 import Hledger.UI.UITypes
 import Hledger.UI.UIState
@@ -39,11 +44,12 @@ esInit _ _ ui@UIState{aScreen=ErrorScreen{}} = ui
 esInit _ _ _ = error "init function called with wrong screen type, should not happen"
 
 esDraw :: UIState -> [Widget Name]
-esDraw UIState{ --aopts=UIOpts{cliopts_=copts@CliOpts{}}
-               aScreen=ErrorScreen{..}
-              ,aMode=mode} =
+esDraw UIState{aopts=UIOpts{cliopts_=copts@CliOpts{}}
+              ,aScreen=ErrorScreen{..}
+              ,aMode=mode
+              } =
   case mode of
-    Help       -> [helpDialog, maincontent]
+    Help       -> [helpDialog copts, maincontent]
     -- Minibuffer e -> [minibuffer e, maincontent]
     _          -> [maincontent]
   where
@@ -52,7 +58,7 @@ esDraw UIState{ --aopts=UIOpts{cliopts_=copts@CliOpts{}}
       where
         toplabel =
               withAttr ("border" <> "bold") (str "Oops. Please fix this problem then press g to reload")
-              -- <+> (if ignore_assertions_ copts then withAttr (borderAttr <> "query") (str " ignoring") else str " not ignoring")
+              -- <+> (if ignore_assertions_ copts then withAttr ("border" <> "query") (str " ignoring") else str " not ignoring")
 
         bottomlabel = case mode of
                         -- Minibuffer ed -> minibuffer ed
@@ -69,16 +75,18 @@ esDraw UIState{ --aopts=UIOpts{cliopts_=copts@CliOpts{}}
 esDraw _ = error "draw function called with wrong screen type, should not happen"
 
 esHandle :: UIState -> BrickEvent Name AppEvent -> EventM Name (Next UIState)
-esHandle ui@UIState{
-   aScreen=ErrorScreen{..}
-  ,aopts=UIOpts{cliopts_=copts}
-  ,ajournal=j
-  ,aMode=mode
-  } ev =
+esHandle ui@UIState{aScreen=ErrorScreen{..}
+                   ,aopts=UIOpts{cliopts_=copts}
+                   ,ajournal=j
+                   ,aMode=mode
+                   }
+         ev =
   case mode of
     Help ->
       case ev of
         VtyEvent (EvKey (KChar 'q') []) -> halt ui
+        VtyEvent (EvKey (KChar 'l') [MCtrl]) -> redraw ui
+        VtyEvent (EvKey (KChar 'z') [MCtrl]) -> suspend ui
         _                    -> helpHandle ui ev
 
     _ -> do
@@ -99,21 +107,35 @@ esHandle ui@UIState{
 --             Left err -> continue ui{aScreen=s{esError=err}} -- show latest parse error
 --             Right j' -> continue $ regenerateScreens j' d $ popScreen ui  -- return to previous screen, and reload it
         VtyEvent (EvKey (KChar 'I') []) -> continue $ uiCheckBalanceAssertions d (popScreen $ toggleIgnoreBalanceAssertions ui)
+        VtyEvent (EvKey (KChar 'l') [MCtrl]) -> redraw ui
+        VtyEvent (EvKey (KChar 'z') [MCtrl]) -> suspend ui
         _ -> continue ui
 
 esHandle _ _ = error "event handler called with wrong screen type, should not happen"
 
 -- | Parse the file name, line and column number from a hledger parse error message, if possible.
 -- Temporary, we should keep the original parse error location. XXX
-hledgerparseerrorpositionp :: ParsecT Dec String t (String, Int, Int)
+-- Keep in sync with 'Hledger.Data.Transaction.showGenericSourcePos'
+hledgerparseerrorpositionp :: ParsecT Void String t (String, Int, Int)
 hledgerparseerrorpositionp = do
-  anyChar `manyTill` char '"'
-  f <- anyChar `manyTill` (oneOf ['"','\n'])
-  string " (line "
-  l <- read <$> some digitChar
-  string ", column "
-  c <- read <$> some digitChar
-  return (f, l, c)
+  anySingle `manyTill` char '"'
+  f <- anySingle `manyTill` (oneOf ['"','\n'])
+  choice [
+      do
+          string " (line "
+          l <- read <$> some digitChar
+          string ", column "
+          c <- read <$> some digitChar
+          return (f, l, c),
+      do
+          string " (lines "
+          l <- read <$> some digitChar
+          char '-'
+          some digitChar
+          char ')'
+          return (f, l, 1)
+      ]
+
 
 -- Unconditionally reload the journal, regenerating the current screen
 -- and all previous screens in the history.
@@ -151,11 +173,11 @@ uiReloadJournalIfChanged copts d j ui = do
 -- are disabled, do nothing.
 uiCheckBalanceAssertions :: Day -> UIState -> UIState
 uiCheckBalanceAssertions d ui@UIState{aopts=UIOpts{cliopts_=copts}, ajournal=j}
-  | ignore_assertions_ copts = ui
+  | ignore_assertions_ $ inputopts_ copts = ui
   | otherwise =
     case journalCheckBalanceAssertions j of
-      Right _  -> ui
-      Left err ->
+      Nothing  -> ui
+      Just err ->
         case ui of
           UIState{aScreen=s@ErrorScreen{}} -> ui{aScreen=s{esError=err}}
           _                                -> screenEnter d errorScreen{esError=err} ui

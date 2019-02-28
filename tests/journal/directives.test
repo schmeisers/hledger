@@ -1,4 +1,4 @@
-# . apply account, end apply account
+# apply account, end apply account directives
 hledger -f - accounts
 <<<
 apply account a
@@ -16,3 +16,21 @@ a:b
 aa:b
 c
 >>>=0
+
+# commodity directive
+hledger -f - reg
+<<<
+commodity BTC
+>>>
+>>>2
+>>>=0
+
+# commodity directive with subdirective
+hledger -f - reg
+<<<
+commodity BTC
+  note Bitcoin
+>>>
+>>>2 /expecting "format"/
+>>>=1
+

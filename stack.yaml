@@ -1,7 +1,6 @@
-# Last-tested stack build plan using GHC 8.0.
-# Older/newer snapshots in this series will likely work also.
+# stack build plan using GHC 8.6.3
 
-resolver: lts-7.7
+resolver: nightly-2019-01-04
 
 packages:
 - hledger-lib
@@ -9,11 +8,17 @@ packages:
 - hledger-ui
 - hledger-api
 
-extra-deps:
-# for hledger-ui:
-- brick-0.15
-- vty-5.14
-- text-zipper-0.8.1
-# for hledger-web:
+nix:
+  pure: false
+  packages: [perl gmp ncurses zlib]
 
-# cf https://github.com/commercialhaskell/stack/wiki/stack.yaml
+# allow-newer: true
+
+extra-deps:
+# hledger-lib:
+# hledger:
+# hledger-ui:
+# hledger-web:
+# hledger-api:
+# Workaround for https://github.com/commercialhaskell/stack/issues/3922:
+- haskell-src-exts-1.20.3

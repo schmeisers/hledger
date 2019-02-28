@@ -9,30 +9,15 @@ hledger -f - print
    A  -1712 D
 >>>
 2010/01/01 x
-    A  55.3653 C @ 30.92189512 D
-    A                    -1712 D
+    A    55.3653 C @ 30.92189512 D
+    A                      -1712 D
 
 >>>=0
 
-## 1b. here $'s canonical display precision should be 2 not 4
-## XXX no, because the inferred amount $1.0049 is observed
-# hledger -f - print --cost
-# <<<
-# 2010/1/1
-#    a  $0.00
-#    a  1C @ $1.0049
-#    a
-# >>>
-# 2010/01/01
-#     a             0
-#     a         $1.00
-#     a        $-1.00
-#
-# >>>=0
-
-# 2. and here the price should be printed with its original precision, not
-# the canonical display precision
-hledger -f - print
+# 2. here the price should be printed with its original precision, not
+# the canonical display precision. And the inferred amount should be printed
+# with the canonical precision (2 digits, inferred from the first posting).
+hledger -f - print --explicit
 <<<
 2010/1/1
    a  $0.00
@@ -40,9 +25,9 @@ hledger -f - print
    a
 >>>
 2010/01/01
-    a             0
-    a  1C @ $1.0049
-    a      $-1.0049
+    a               0
+    a    1C @ $1.0049
+    a          $-1.00
 
 >>>=0
 
@@ -130,7 +115,7 @@ D $1000.0
 # the max precisions of the commodities being converted (#262).
 # Here the (irrational) price should be displayed with just precision 4
 # (C's precision 2 + D's precision 2).
-hledger -f- print
+hledger -f- print --explicit
 <<<
 2015/1/1
     c    C 10.00
@@ -138,16 +123,16 @@ hledger -f- print
     d  D -320.00
 >>>
 2015/01/01
-    c  C 10.00 @ D 15.2381
-    c  C 11.00 @ D 15.2381
-    d            D -320.00
+    c    C 10.00 @ D 15.2381
+    c    C 11.00 @ D 15.2381
+    d              D -320.00
 
 >>>=0
 
 
 ## 8. Here the price should be displayed with precision 7
 # (E's precision 4 + F's precision 3).
-hledger -f- print
+hledger -f- print --explicit
 <<<
 2015/1/1
     e    E 10.0000
@@ -155,8 +140,8 @@ hledger -f- print
     f  F -320.000
 >>>
 2015/01/01
-    e  E 10.0000 @ F 15.2380952
-    e  E 11.0000 @ F 15.2380952
-    f                F -320.000
+    e    E 10.0000 @ F 15.2380952
+    e    E 11.0000 @ F 15.2380952
+    f                  F -320.000
 
 >>>=0

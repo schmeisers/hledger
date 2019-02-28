@@ -8,19 +8,31 @@ look up the date or description there.
 -}
 
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE CPP #-}
 
 module Hledger.Data.Posting (
   -- * Posting
   nullposting,
   posting,
   post,
+  vpost,
+  post',
+  vpost',
+  nullsourcepos,
+  nullassertion,
+  assertion,
+  balassert,
+  balassertTot,
+  balassertParInc,
+  balassertTotInc,
   -- * operations
+  originalPosting,
   postingStatus,
   isReal,
   isVirtual,
   isBalancedVirtual,
   isEmptyPosting,
-  isAssignment,
+  hasBalanceAssignment,
   hasAmount,
   postingAllTags,
   transactionAllTags,
@@ -42,40 +54,43 @@ module Hledger.Data.Posting (
   concatAccountNames,
   accountNameApplyAliases,
   accountNameApplyAliasesMemo,
+  -- * transaction description operations
+  transactionPayee,
+  transactionNote,
+  payeeAndNoteFromDescription,
   -- * arithmetic
   sumPostings,
   -- * rendering
   showPosting,
   -- * misc.
   showComment,
-  tests_Hledger_Data_Posting
+  tests_Posting
 )
 where
 import Data.List
 import Data.Maybe
 import Data.MemoUgly (memo)
+#if !(MIN_VERSION_base(4,11,0))
 import Data.Monoid
-import Data.Ord
+#endif
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Calendar
 import Safe
-import Test.HUnit
 
-import Hledger.Utils
+import Hledger.Utils 
 import Hledger.Data.Types
 import Hledger.Data.Amount
 import Hledger.Data.AccountName
 import Hledger.Data.Dates (nulldate, spanContainsDate)
 
 
-instance Show Posting where show = showPosting
 
 nullposting, posting :: Posting
 nullposting = Posting
                 {pdate=Nothing
                 ,pdate2=Nothing
-                ,pstatus=Uncleared
+                ,pstatus=Unmarked
                 ,paccount=""
                 ,pamount=nullmixedamt
                 ,pcomment=""
@@ -83,11 +98,59 @@ nullposting = Posting
                 ,ptags=[]
                 ,pbalanceassertion=Nothing
                 ,ptransaction=Nothing
+                ,poriginal=Nothing
                 }
 posting = nullposting
 
+-- constructors
+
+-- | Make a posting to an account.
 post :: AccountName -> Amount -> Posting
-post acct amt = posting {paccount=acct, pamount=Mixed [amt]}
+post acc amt = posting {paccount=acc, pamount=Mixed [amt]}
+
+-- | Make a virtual (unbalanced) posting to an account.
+vpost :: AccountName -> Amount -> Posting
+vpost acc amt = (post acc amt){ptype=VirtualPosting}
+
+-- | Make a posting to an account, maybe with a balance assertion.
+post' :: AccountName -> Amount -> Maybe BalanceAssertion -> Posting
+post' acc amt ass = posting {paccount=acc, pamount=Mixed [amt], pbalanceassertion=ass}
+
+-- | Make a virtual (unbalanced) posting to an account, maybe with a balance assertion.
+vpost' :: AccountName -> Amount -> Maybe BalanceAssertion -> Posting
+vpost' acc amt ass = (post' acc amt ass){ptype=VirtualPosting, pbalanceassertion=ass}
+
+nullsourcepos :: GenericSourcePos
+nullsourcepos = JournalSourcePos "" (1,1)
+
+nullassertion, assertion :: BalanceAssertion
+nullassertion = BalanceAssertion
+                  {baamount=nullamt
+                  ,batotal=False
+                  ,bainclusive=False
+                  ,baposition=nullsourcepos
+                  }
+assertion = nullassertion
+
+-- | Make a partial, exclusive balance assertion.
+balassert :: Amount -> Maybe BalanceAssertion
+balassert amt = Just $ nullassertion{baamount=amt}
+
+-- | Make a total, exclusive balance assertion.
+balassertTot :: Amount -> Maybe BalanceAssertion
+balassertTot amt = Just $ nullassertion{baamount=amt, batotal=True}
+
+-- | Make a partial, inclusive balance assertion.
+balassertParInc :: Amount -> Maybe BalanceAssertion
+balassertParInc amt = Just $ nullassertion{baamount=amt, bainclusive=True}
+
+-- | Make a total, inclusive balance assertion.
+balassertTotInc :: Amount -> Maybe BalanceAssertion
+balassertTotInc amt = Just $ nullassertion{baamount=amt, batotal=True, bainclusive=True}
+
+-- Get the original posting, if any.
+originalPosting :: Posting -> Posting
+originalPosting p = fromMaybe p $ poriginal p
 
 -- XXX once rendered user output, but just for debugging now; clean up
 showPosting :: Posting -> String
@@ -119,14 +182,15 @@ isBalancedVirtual p = ptype p == BalancedVirtualPosting
 hasAmount :: Posting -> Bool
 hasAmount = (/= missingmixedamt) . pamount
 
-isAssignment :: Posting -> Bool
-isAssignment p = not (hasAmount p) && isJust (pbalanceassertion p)
+hasBalanceAssignment :: Posting -> Bool
+hasBalanceAssignment p = not (hasAmount p) && isJust (pbalanceassertion p)
 
+-- | Sorted unique account names referenced by these postings.
 accountNamesFromPostings :: [Posting] -> [AccountName]
-accountNamesFromPostings = nub . map paccount
+accountNamesFromPostings = nub . sort . map paccount
 
 sumPostings :: [Posting] -> MixedAmount
-sumPostings = sum . map pamount
+sumPostings = sumStrict . map pamount
 
 -- | Remove all prices of a posting
 removePrices :: Posting -> Posting
@@ -150,18 +214,36 @@ postingDate2 p = headDef nulldate $ catMaybes dates
   where dates = [pdate2 p
                 ,maybe Nothing tdate2 $ ptransaction p
                 ,pdate p
-                ,maybe Nothing (Just . tdate) $ ptransaction p
+                ,fmap tdate (ptransaction p)
                 ]
 
--- | Get a posting's cleared status: cleared or pending if those are
--- explicitly set, otherwise the cleared status of its parent
--- transaction, or uncleared if there is no parent transaction. (Note
--- Uncleared's ambiguity, it can mean "uncleared" or "don't know".
-postingStatus :: Posting -> ClearedStatus
+-- | Get a posting's status. This is cleared or pending if those are
+-- explicitly set on the posting, otherwise the status of its parent
+-- transaction, or unmarked if there is no parent transaction. (Note
+-- the ambiguity, unmarked can mean "posting and transaction are both 
+-- unmarked" or "posting is unmarked and don't know about the transaction".
+postingStatus :: Posting -> Status
 postingStatus Posting{pstatus=s, ptransaction=mt}
-  | s == Uncleared = case mt of Just t  -> tstatus t
-                                Nothing -> Uncleared
+  | s == Unmarked = case mt of Just t  -> tstatus t
+                               Nothing -> Unmarked
   | otherwise = s
+
+transactionPayee :: Transaction -> Text
+transactionPayee = fst . payeeAndNoteFromDescription . tdescription
+
+transactionNote :: Transaction -> Text
+transactionNote = snd . payeeAndNoteFromDescription . tdescription
+
+-- | Parse a transaction's description into payee and note (aka narration) fields,
+-- assuming a convention of separating these with | (like Beancount).
+-- Ie, everything up to the first | is the payee, everything after it is the note.
+-- When there's no |, payee == note == description.
+payeeAndNoteFromDescription :: Text -> (Text,Text)
+payeeAndNoteFromDescription t
+  | T.null n = (t, t)
+  | otherwise = (textstrip p, textstrip $ T.drop 1 n)
+  where
+    (p, n) = T.span (/= '|') t
 
 -- | Tags for this posting including any inherited from its parent transaction.
 postingAllTags :: Posting -> [Tag]
@@ -193,14 +275,14 @@ isEmptyPosting = isZeroMixedAmount . pamount
 postingsDateSpan :: [Posting] -> DateSpan
 postingsDateSpan [] = DateSpan Nothing Nothing
 postingsDateSpan ps = DateSpan (Just $ postingDate $ head ps') (Just $ addDays 1 $ postingDate $ last ps')
-    where ps' = sortBy (comparing postingDate) ps
+    where ps' = sortOn postingDate ps
 
 -- --date2-sensitive version, as above.
 postingsDateSpan' :: WhichDate -> [Posting] -> DateSpan
 postingsDateSpan' _  [] = DateSpan Nothing Nothing
 postingsDateSpan' wd ps = DateSpan (Just $ postingdate $ head ps') (Just $ addDays 1 $ postingdate $ last ps')
     where
-      ps' = sortBy (comparing postingdate) ps
+      ps' = sortOn postingdate ps
       postingdate = if wd == PrimaryDate then postingDate else postingDate2
 
 -- AccountName stuff that depends on PostingType
@@ -261,28 +343,35 @@ aliasReplace (BasicAlias old new) a
 aliasReplace (RegexAlias re repl) a = T.pack $ regexReplaceCIMemo re repl $ T.unpack a -- XXX
 
 
-tests_Hledger_Data_Posting = TestList [
+-- tests
 
-  "accountNamePostingType" ~: do
+tests_Posting = tests "Posting" [
+
+  tests "accountNamePostingType" [
     accountNamePostingType "a" `is` RegularPosting
-    accountNamePostingType "(a)" `is` VirtualPosting
-    accountNamePostingType "[a]" `is` BalancedVirtualPosting
+    ,accountNamePostingType "(a)" `is` VirtualPosting
+    ,accountNamePostingType "[a]" `is` BalancedVirtualPosting
+  ]
 
- ,"accountNameWithoutPostingType" ~: do
+ ,tests "accountNameWithoutPostingType" [
     accountNameWithoutPostingType "(a)" `is` "a"
+  ]
 
- ,"accountNameWithPostingType" ~: do
+ ,tests "accountNameWithPostingType" [
     accountNameWithPostingType VirtualPosting "[a]" `is` "(a)"
+  ]
 
- ,"joinAccountNames" ~: do
+ ,tests "joinAccountNames" [
     "a" `joinAccountNames` "b:c" `is` "a:b:c"
-    "a" `joinAccountNames` "(b:c)" `is` "(a:b:c)"
-    "[a]" `joinAccountNames` "(b:c)" `is` "[a:b:c]"
-    "" `joinAccountNames` "a" `is` "a"
+    ,"a" `joinAccountNames` "(b:c)" `is` "(a:b:c)"
+    ,"[a]" `joinAccountNames` "(b:c)" `is` "[a:b:c]"
+    ,"" `joinAccountNames` "a" `is` "a"
+  ]
 
- ,"concatAccountNames" ~: do
+ ,tests "concatAccountNames" [
     concatAccountNames [] `is` ""
-    concatAccountNames ["a","(b)","[c:d]"] `is` "(a:b:c:d)"
+    ,concatAccountNames ["a","(b)","[c:d]"] `is` "(a:b:c:d)"
+  ]
 
  ]
 

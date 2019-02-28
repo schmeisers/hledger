@@ -1,4 +1,5 @@
-{-# LANGUAGE ScopedTypeVariables, CPP #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE NoOverloadedStrings #-} -- prevent trouble if turned on in ghci
 {-|
 
 Utilities for top-level modules and ghci. See also Hledger.Read and
@@ -10,6 +11,9 @@ module Hledger.Cli.Utils
     (
      withJournalDo,
      writeOutput,
+     journalTransform,
+     journalApplyValue,
+     journalAddForecast,
      journalReload,
      journalReloadIfChanged,
      journalFileIsNewer,
@@ -19,17 +23,19 @@ module Hledger.Cli.Utils
      writeFileWithBackup,
      writeFileWithBackupIfChanged,
      readFileStrictly,
-     Test(TestList),
+     pivotByOpts,
+     anonymiseByOpts,
     )
 where
 import Control.Exception as C
+import Control.Monad
+
 import Data.Hashable (hash)
 import Data.List
 import Data.Maybe
-import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
-import Data.Time (Day)
+import Data.Time (Day, addDays)
 import Data.Word
 import Numeric
 import Safe (readMay)
@@ -40,60 +46,51 @@ import System.FilePath ((</>), splitFileName, takeDirectory)
 import System.Info (os)
 import System.Process (readProcessWithExitCode)
 import System.Time (ClockTime, getClockTime, diffClockTimes, TimeDiff(TimeDiff))
-import Test.HUnit
 import Text.Printf
 import Text.Regex.TDFA ((=~))
 
-
--- kludge - adapt to whichever directory version is installed, or when
--- cabal macros aren't available, assume the new directory
-#ifdef MIN_VERSION_directory
-#if MIN_VERSION_directory(1,2,0)
-#define directory_1_2
-#endif
-#else
-#define directory_1_2
-#endif
-
-#ifdef directory_1_2
 import System.Time (ClockTime(TOD))
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-#endif
 
 import Hledger.Cli.CliOptions
 import Hledger.Data
 import Hledger.Read
+import Hledger.Reports
 import Hledger.Utils
 
-
--- | Parse the user's specified journal file, maybe apply some transformations
--- (aliases, pivot) and run a hledger command on it, or throw an error.
+-- | Parse the user's specified journal file(s) as a Journal, maybe apply some
+-- transformations according to options, and run a hledger command with it. 
+-- Or, throw an error.
 withJournalDo :: CliOpts -> (CliOpts -> Journal -> IO ()) -> IO ()
 withJournalDo opts cmd = do
   -- We kludgily read the file before parsing to grab the full text, unless
   -- it's stdin, or it doesn't exist and we are adding. We read it strictly
   -- to let the add command work.
-  rulespath <- rulesFilePathFromOpts opts
   journalpaths <- journalFilePathFromOpts opts
-  ej <- readJournalFiles Nothing rulespath (not $ ignore_assertions_ opts) journalpaths
-  either error' (cmd opts . pivotByOpts opts . anonymiseByOpts opts . journalApplyAliases (aliasesFromOpts opts)) ej
+  readJournalFiles (inputopts_ opts) journalpaths 
+  >>= mapM (journalTransform opts)
+  >>= either error' (cmd opts)
+
+-- | Apply some transformations to the journal if specified by options.
+-- These include:
+-- 
+-- - adding forecast transactions (--forecast)
+-- - converting amounts to market value (--value)
+-- - pivoting account names (--pivot)
+-- - anonymising (--anonymise).
+journalTransform :: CliOpts -> Journal -> IO Journal
+journalTransform opts@CliOpts{reportopts_=ropts} =
+      journalAddForecast opts
+  >=> journalApplyValue ropts
+  >=> return . pivotByOpts opts
+  >=> return . anonymiseByOpts opts
 
 -- | Apply the pivot transformation on a journal, if option is present.
 pivotByOpts :: CliOpts -> Journal -> Journal
 pivotByOpts opts =
   case maybestringopt "pivot" . rawopts_ $ opts of
-    Just tag -> pivot $ T.pack tag
+    Just tag -> journalPivot $ T.pack tag
     Nothing  -> id
-
--- | Apply the pivot transformation by given tag on a journal.
-pivot :: Text -> Journal -> Journal
-pivot tag j = j{jtxns = map pivotTrans . jtxns $ j}
- where
-  pivotTrans t = t{tpostings = map pivotPosting . tpostings $ t}
-  pivotPosting p
-    | Just (_ , value) <- tagTuple = p{paccount = joinAccountNames tag value}
-    | _                <- tagTuple = p
-   where tagTuple = find ((tag ==) . fst) . ptags $ p
 
 -- | Apply the anonymisation transformation on a journal, if option is present
 anonymiseByOpts :: CliOpts -> Journal -> Journal
@@ -109,6 +106,7 @@ anonymise j
       pAnons p = p { paccount = T.intercalate (T.pack ":") . map anon . T.splitOn (T.pack ":") . paccount $ p
                    , pcomment = T.empty
                    , ptransaction = fmap tAnons . ptransaction $ p
+                   , poriginal = pAnons <$> poriginal p
                    }
       tAnons txn = txn { tpostings = map pAnons . tpostings $ txn
                        , tdescription = anon . tdescription $ txn
@@ -119,25 +117,78 @@ anonymise j
   where
     anon = T.pack . flip showHex "" . (fromIntegral :: Int -> Word32) . hash
 
+-- TODO move journalApplyValue and friends to Hledger.Data.Journal ? They are here because they use ReportOpts
+
+-- | If -V/--value was requested, convert all journal amounts to their market value
+-- as of the report end date. Cf http://hledger.org/manual.html#market-value
+-- Since 2017/4 we do this early, before commands run, which affects all commands
+-- and seems to have the same effect as doing it last on the reported values.
+journalApplyValue :: ReportOpts -> Journal -> IO Journal
+journalApplyValue ropts j = do
+    today <- getCurrentDay
+    mspecifiedenddate <- specifiedEndDate ropts
+    let d = fromMaybe today mspecifiedenddate
+        convert | value_ ropts = overJournalAmounts (amountValue j d)
+                | otherwise    = id
+    return $ convert j
+
+-- | Generate periodic transactions from all periodic transaction rules in the journal.
+-- These transactions are added to the in-memory Journal (but not the on-disk file).
+--
+-- They start on or after the day following the latest normal transaction in the journal,
+-- or today if there are none.
+-- They end on or before the specified report end date, or 180 days from today if unspecified.
+--
+journalAddForecast :: CliOpts -> Journal -> IO Journal
+journalAddForecast opts@CliOpts{inputopts_=iopts, reportopts_=ropts} j = do
+  today <- getCurrentDay
+
+  -- "They start on or after the day following the latest normal transaction in the journal, or today if there are none."
+  let DateSpan _ mjournalend = dbg2 "journalspan"   $ journalDateSpan False j  -- ignore secondary dates
+      forecaststart          = dbg2 "forecaststart" $ fromMaybe today mjournalend
+
+  -- "They end on or before the specified report end date, or 180 days from today if unspecified."
+  mspecifiedend <-  snd . dbg2 "specifieddates" <$> specifiedStartEndDates ropts
+  let forecastend = dbg2 "forecastend" $ fromMaybe (addDays 180 today) mspecifiedend
+
+  let forecastspan = DateSpan (Just forecaststart) (Just forecastend)
+      forecasttxns =
+        [ txnTieKnot t | pt <- jperiodictxns j
+                       , t <- runPeriodicTransaction pt forecastspan
+                       , spanContainsDate forecastspan (tdate t)
+                       ]
+      -- With --auto enabled, transaction modifiers are also applied to forecast txns
+      forecasttxns' = (if auto_ iopts then modifyTransactions (jtxnmodifiers j) else id) forecasttxns
+
+  return $
+    if forecast_ ropts 
+      then journalBalanceTransactions' opts j{ jtxns = concat [jtxns j, forecasttxns'] }
+      else j
+  where      
+    journalBalanceTransactions' opts j =
+      let assrt = not . ignore_assertions_ $ inputopts_ opts
+      in
+       either error' id $ journalBalanceTransactions assrt j
+
 -- | Write some output to stdout or to a file selected by --output-file.
+-- If the file exists it will be overwritten.
 writeOutput :: CliOpts -> String -> IO ()
 writeOutput opts s = do
   f <- outputFileFromOpts opts
   (if f == "-" then putStr else writeFile f) s
   
 -- -- | Get a journal from the given string and options, or throw an error.
--- readJournalWithOpts :: CliOpts -> String -> IO Journal
--- readJournalWithOpts opts s = readJournal Nothing Nothing Nothing s >>= either error' return
+-- readJournal :: CliOpts -> String -> IO Journal
+-- readJournal opts s = readJournal def Nothing s >>= either error' return
 
--- | Re-read the journal file(s) specified by options and maybe apply some
--- transformations (aliases, pivot), or return an error string.
+-- | Re-read the journal file(s) specified by options, applying any
+-- transformations specified by options. Or return an error string.
 -- Reads the full journal, without filtering.
 journalReload :: CliOpts -> IO (Either String Journal)
 journalReload opts = do
-  rulespath <- rulesFilePathFromOpts opts
   journalpaths <- journalFilePathFromOpts opts
-  ((pivotByOpts opts . journalApplyAliases (aliasesFromOpts opts)) <$>) <$>
-    readJournalFiles Nothing rulespath (not $ ignore_assertions_ opts) journalpaths
+  readJournalFiles (inputopts_ opts) journalpaths
+  >>= mapM (journalTransform opts)
 
 -- | Re-read the option-specified journal file(s), but only if any of
 -- them has changed since last read. (If the file is standard input,
@@ -178,13 +229,9 @@ fileModificationTime :: FilePath -> IO ClockTime
 fileModificationTime f
     | null f = getClockTime
     | otherwise = (do
-#ifdef directory_1_2
         utc <- getModificationTime f
         let nom = utcTimeToPOSIXSeconds utc
         let clo = TOD (read $ takeWhile (`elem` "0123456789") $ show nom) 0 -- XXX read
-#else
-        clo <- getModificationTime f
-#endif
         return clo
         )
         `C.catch` \(_::C.IOException) -> getClockTime
@@ -216,7 +263,7 @@ openBrowserOn u = trybrowsers browsers u
 -- indicating whether we did anything.
 writeFileWithBackupIfChanged :: FilePath -> T.Text -> IO Bool
 writeFileWithBackupIfChanged f t = do
-  s <- readFile' f
+  s <- readFilePortably f
   if t == s then return False
             else backUpFile f >> T.writeFile f t >> return True
 
@@ -226,7 +273,7 @@ writeFileWithBackup :: FilePath -> String -> IO ()
 writeFileWithBackup f t = backUpFile f >> writeFile f t
 
 readFileStrictly :: FilePath -> IO T.Text
-readFileStrictly f = readFile' f >>= \s -> C.evaluate (T.length s) >> return s
+readFileStrictly f = readFilePortably f >>= \s -> C.evaluate (T.length s) >> return s
 
 -- | Back up this file with a (incrementing) numbered suffix, or give an error.
 backUpFile :: FilePath -> IO ()

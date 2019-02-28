@@ -1,9 +1,10 @@
-{-# LANGUAGE CPP, RecordWildCards, DeriveDataTypeable #-}
 {-|
 
 Options common to most hledger reports.
 
 -}
+
+{-# LANGUAGE OverloadedStrings, RecordWildCards, DeriveDataTypeable #-}
 
 module Hledger.Reports.ReportOptions (
   ReportOpts(..),
@@ -15,29 +16,39 @@ module Hledger.Reports.ReportOptions (
   checkReportOpts,
   flat_,
   tree_,
+  reportOptsToggleStatus,
+  simplifyStatuses,
   whichDateFromOpts,
   journalSelectingAmountFromOpts,
+  intervalFromRawOpts,
   queryFromOpts,
   queryFromOptsOnly,
   queryOptsFromOpts,
   transactionDateFn,
   postingDateFn,
+  reportSpan,
+  reportStartDate,
+  reportEndDate,
+  specifiedStartEndDates,
+  specifiedStartDate,
+  specifiedEndDate,
 
-  tests_Hledger_Reports_ReportOptions
+  tests_ReportOptions
 )
 where
 
+import Control.Applicative ((<|>))
 import Data.Data (Data)
-#if !MIN_VERSION_base(4,8,0)
-import Data.Functor.Compat ((<$>))
-#endif
+import Data.List
 import Data.Maybe
 import qualified Data.Text as T
 import Data.Typeable (Typeable)
 import Data.Time.Calendar
 import Data.Default
 import Safe
-import Test.HUnit
+import System.Console.ANSI (hSupportsANSI)
+import System.IO (stdout)
+import Text.Megaparsec.Custom
 
 import Hledger.Data
 import Hledger.Query
@@ -61,13 +72,14 @@ data AccountListMode = ALDefault | ALTree | ALFlat deriving (Eq, Show, Data, Typ
 
 instance Default AccountListMode where def = ALDefault
 
--- | Standard options for customising report filtering and output,
--- corresponding to hledger's command-line options and query language
--- arguments. Used in hledger-lib and above.
+-- | Standard options for customising report filtering and output.
+-- Most of these correspond to standard hledger command-line options
+-- or query arguments, but not all. Some are used only by certain
+-- commands, as noted below. 
 data ReportOpts = ReportOpts {
      period_         :: Period
     ,interval_       :: Interval
-    ,clearedstatus_  :: Maybe ClearedStatus
+    ,statuses_       :: [Status]  -- ^ Zero, one, or two statuses to be matched
     ,cost_           :: Bool
     ,depth_          :: Maybe Int
     ,display_        :: Maybe DisplayExp
@@ -77,20 +89,33 @@ data ReportOpts = ReportOpts {
     ,real_           :: Bool
     ,format_         :: Maybe FormatStr
     ,query_          :: String -- all arguments, as a string
-    -- register only
+    -- register command only
     ,average_        :: Bool
     ,related_        :: Bool
-    -- balance only
+    -- balance-type commands only
     ,balancetype_    :: BalanceType
     ,accountlistmode_ :: AccountListMode
     ,drop_           :: Int
     ,row_total_      :: Bool
     ,no_total_       :: Bool
     ,value_          :: Bool
+    ,pretty_tables_  :: Bool
+    ,sort_amount_    :: Bool
+    ,invert_         :: Bool  -- ^ if true, flip all amount signs in reports
+    ,normalbalance_  :: Maybe NormalSign
+      -- ^ This can be set when running balance reports on a set of accounts
+      --   with the same normal balance type (eg all assets, or all incomes).
+      -- - It helps --sort-amount know how to sort negative numbers
+      --   (eg in the income section of an income statement) 
+      -- - It helps compound balance report commands (is, bs etc.) do  
+      --   sign normalisation, converting normally negative subreports to 
+      --   normally positive for a more conventional display.   
+    ,color_          :: Bool
+    ,forecast_       :: Bool
+    ,transpose_      :: Bool
  } deriving (Show, Data, Typeable)
 
 instance Default ReportOpts where def = defreportopts
-instance Default Bool where def = False
 
 defreportopts :: ReportOpts
 defreportopts = ReportOpts
@@ -114,15 +139,23 @@ defreportopts = ReportOpts
     def
     def
     def
+    def
+    def
+    def
+    def
+    def
+    def
+    def
 
 rawOptsToReportOpts :: RawOpts -> IO ReportOpts
 rawOptsToReportOpts rawopts = checkReportOpts <$> do
-  d <- getCurrentDay
   let rawopts' = checkRawOpts rawopts
+  d <- getCurrentDay
+  color <- hSupportsANSI stdout
   return defreportopts{
      period_      = periodFromRawOpts d rawopts'
     ,interval_    = intervalFromRawOpts rawopts'
-    ,clearedstatus_ = clearedStatusFromRawOpts rawopts'
+    ,statuses_    = statusesFromRawOpts rawopts'
     ,cost_        = boolopt "cost" rawopts'
     ,depth_       = maybeintopt "depth" rawopts'
     ,display_     = maybedisplayopt d rawopts'
@@ -140,6 +173,12 @@ rawOptsToReportOpts rawopts = checkReportOpts <$> do
     ,row_total_   = boolopt "row-total" rawopts'
     ,no_total_    = boolopt "no-total" rawopts'
     ,value_       = boolopt "value" rawopts'
+    ,sort_amount_ = boolopt "sort-amount" rawopts'
+    ,invert_      = boolopt "invert" rawopts'
+    ,pretty_tables_ = boolopt "pretty-tables" rawopts'
+    ,color_       = color
+    ,forecast_    = boolopt "forecast" rawopts'
+    ,transpose_   = boolopt "transpose" rawopts'
     }
 
 -- | Do extra validation of raw option values, raising an error if there's a problem.
@@ -148,11 +187,11 @@ checkRawOpts rawopts
 -- our standard behaviour is to accept conflicting options actually,
 -- using the last one - more forgiving for overriding command-line aliases
 --   | countopts ["change","cumulative","historical"] > 1
---     = optserror "please specify at most one of --change, --cumulative, --historical"
+--     = usageError "please specify at most one of --change, --cumulative, --historical"
 --   | countopts ["flat","tree"] > 1
---     = optserror "please specify at most one of --flat, --tree"
+--     = usageError "please specify at most one of --flat, --tree"
 --   | countopts ["daily","weekly","monthly","quarterly","yearly"] > 1
---     = optserror "please specify at most one of --daily, "
+--     = usageError "please specify at most one of --daily, "
   | otherwise = rawopts
 --   where
 --     countopts = length . filter (`boolopt` rawopts)
@@ -160,7 +199,7 @@ checkRawOpts rawopts
 -- | Do extra validation of report options, raising an error if there's a problem.
 checkReportOpts :: ReportOpts -> ReportOpts
 checkReportOpts ropts@ReportOpts{..} =
-  either optserror (const ropts) $ do
+  either usageError (const ropts) $ do
     case depth_ of
       Just d | d < 0 -> Left "--depth should have a positive number"
       _              -> Right ()
@@ -204,11 +243,11 @@ beginDatesFromRawOpts d = catMaybes . map (begindatefromrawopt d)
   where
     begindatefromrawopt d (n,v)
       | n == "begin" =
-          either (\e -> optserror $ "could not parse "++n++" date: "++show e) Just $
+          either (\e -> usageError $ "could not parse "++n++" date: "++customErrorBundlePretty e) Just $
           fixSmartDateStrEither' d (T.pack v)
       | n == "period" =
         case
-          either (\e -> optserror $ "could not parse period option: "++show e) id $
+          either (\e -> usageError $ "could not parse period option: "++customErrorBundlePretty e) id $
           parsePeriodExpr d (stripquotes $ T.pack v)
         of
           (_, DateSpan (Just b) _) -> Just b
@@ -222,11 +261,11 @@ endDatesFromRawOpts d = catMaybes . map (enddatefromrawopt d)
   where
     enddatefromrawopt d (n,v)
       | n == "end" =
-          either (\e -> optserror $ "could not parse "++n++" date: "++show e) Just $
+          either (\e -> usageError $ "could not parse "++n++" date: "++customErrorBundlePretty e) Just $
           fixSmartDateStrEither' d (T.pack v)
       | n == "period" =
         case
-          either (\e -> optserror $ "could not parse period option: "++show e) id $
+          either (\e -> usageError $ "could not parse period option: "++customErrorBundlePretty e) id $
           parsePeriodExpr d (stripquotes $ T.pack v)
         of
           (_, DateSpan _ (Just e)) -> Just e
@@ -240,7 +279,7 @@ intervalFromRawOpts = lastDef NoInterval . catMaybes . map intervalfromrawopt
   where
     intervalfromrawopt (n,v)
       | n == "period" =
-          either (\e -> optserror $ "could not parse period option: "++show e) (Just . fst) $
+          either (\e -> usageError $ "could not parse period option: "++customErrorBundlePretty e) (Just . fst) $
           parsePeriodExpr nulldate (stripquotes $ T.pack v) -- reference date does not affect the interval
       | n == "daily"     = Just $ Days 1
       | n == "weekly"    = Just $ Weeks 1
@@ -249,16 +288,31 @@ intervalFromRawOpts = lastDef NoInterval . catMaybes . map intervalfromrawopt
       | n == "yearly"    = Just $ Years 1
       | otherwise = Nothing
 
--- | Get the cleared status, if any, specified by the last of -C/--cleared,
--- --pending, -U/--uncleared options.
-clearedStatusFromRawOpts :: RawOpts -> Maybe ClearedStatus
-clearedStatusFromRawOpts = lastMay . catMaybes . map clearedstatusfromrawopt
+-- | Get any statuses to be matched, as specified by -U/--unmarked,
+-- -P/--pending, -C/--cleared flags. -UPC is equivalent to no flags,
+-- so this returns a list of 0-2 unique statuses.
+statusesFromRawOpts :: RawOpts -> [Status]
+statusesFromRawOpts = simplifyStatuses . catMaybes . map statusfromrawopt
   where
-    clearedstatusfromrawopt (n,_)
-      | n == "cleared"   = Just Cleared
+    statusfromrawopt (n,_)
+      | n == "unmarked"  = Just Unmarked
       | n == "pending"   = Just Pending
-      | n == "uncleared" = Just Uncleared
+      | n == "cleared"   = Just Cleared
       | otherwise        = Nothing
+
+-- | Reduce a list of statuses to just one of each status,
+-- and if all statuses are present return the empty list.
+simplifyStatuses l
+  | length l' >= numstatuses = []
+  | otherwise                = l'
+  where
+    l' = nub $ sort l 
+    numstatuses = length [minBound .. maxBound :: Status]
+
+-- | Add/remove this status from the status list. Used by hledger-ui.
+reportOptsToggleStatus s ropts@ReportOpts{statuses_=ss}
+  | s `elem` ss = ropts{statuses_=filter (/= s) ss}
+  | otherwise   = ropts{statuses_=simplifyStatuses (s:ss)}
 
 type DisplayExp = String
 
@@ -306,7 +360,7 @@ queryFromOpts d ReportOpts{..} = simplifyQuery $ And $ [flagsq, argsq]
               [(if date2_ then Date2 else Date) $ periodAsDateSpan period_]
               ++ (if real_ then [Real True] else [])
               ++ (if empty_ then [Empty True] else []) -- ?
-              ++ (maybe [] ((:[]) . Status) clearedstatus_)
+              ++ [Or $ map StatusQ statuses_]
               ++ (maybe [] ((:[]) . Depth) depth_)
     argsq = fst $ parseQuery d (T.pack query_)
 
@@ -318,24 +372,8 @@ queryFromOptsOnly _d ReportOpts{..} = simplifyQuery flagsq
               [(if date2_ then Date2 else Date) $ periodAsDateSpan period_]
               ++ (if real_ then [Real True] else [])
               ++ (if empty_ then [Empty True] else []) -- ?
-              ++ (maybe [] ((:[]) . Status) clearedstatus_)
+              ++ [Or $ map StatusQ statuses_]
               ++ (maybe [] ((:[]) . Depth) depth_)
-
-tests_queryFromOpts :: [Test]
-tests_queryFromOpts = [
- "queryFromOpts" ~: do
-  assertEqual "" Any (queryFromOpts nulldate defreportopts)
-  assertEqual "" (Acct "a") (queryFromOpts nulldate defreportopts{query_="a"})
-  assertEqual "" (Desc "a a") (queryFromOpts nulldate defreportopts{query_="desc:'a a'"})
-  assertEqual "" (Date $ mkdatespan "2012/01/01" "2013/01/01")
-                 (queryFromOpts nulldate defreportopts{period_=PeriodFrom (parsedate "2012/01/01")
-                                                      ,query_="date:'to 2013'"
-                                                      })
-  assertEqual "" (Date2 $ mkdatespan "2012/01/01" "2013/01/01")
-                 (queryFromOpts nulldate defreportopts{query_="date2:'in 2012'"})
-  assertEqual "" (Or [Acct "a a", Acct "'b"])
-                 (queryFromOpts nulldate defreportopts{query_="'a a' 'b"})
- ]
 
 -- | Convert report options and arguments to query options.
 queryOptsFromOpts :: Day -> ReportOpts -> [QueryOpt]
@@ -344,18 +382,65 @@ queryOptsFromOpts d ReportOpts{..} = flagsqopts ++ argsqopts
     flagsqopts = []
     argsqopts = snd $ parseQuery d (T.pack query_)
 
-tests_queryOptsFromOpts :: [Test]
-tests_queryOptsFromOpts = [
- "queryOptsFromOpts" ~: do
-  assertEqual "" [] (queryOptsFromOpts nulldate defreportopts)
-  assertEqual "" [] (queryOptsFromOpts nulldate defreportopts{query_="a"})
-  assertEqual "" [] (queryOptsFromOpts nulldate defreportopts{period_=PeriodFrom (parsedate "2012/01/01")
-                                                             ,query_="date:'to 2013'"
-                                                             })
+-- | The effective report span is the start and end dates specified by
+-- options or queries, or otherwise the earliest and latest transaction or 
+-- posting dates in the journal. If no dates are specified by options/queries
+-- and the journal is empty, returns the null date span.
+-- Needs IO to parse smart dates in options/queries.
+reportSpan :: Journal -> ReportOpts -> IO DateSpan
+reportSpan j ropts = do
+  (mspecifiedstartdate, mspecifiedenddate) <-
+    dbg2 "specifieddates" <$> specifiedStartEndDates ropts
+  let
+    DateSpan mjournalstartdate mjournalenddate =
+      dbg2 "journalspan" $ journalDateSpan False j  -- ignore secondary dates
+    mstartdate = mspecifiedstartdate <|> mjournalstartdate
+    menddate   = mspecifiedenddate   <|> mjournalenddate
+  return $ dbg1 "reportspan" $ DateSpan mstartdate menddate
+
+reportStartDate :: Journal -> ReportOpts -> IO (Maybe Day)
+reportStartDate j ropts = spanStart <$> reportSpan j ropts
+
+reportEndDate :: Journal -> ReportOpts -> IO (Maybe Day)
+reportEndDate j ropts = spanEnd <$> reportSpan j ropts
+
+-- | The specified report start/end dates are the dates specified by options or queries, if any.
+-- Needs IO to parse smart dates in options/queries.
+specifiedStartEndDates :: ReportOpts -> IO (Maybe Day, Maybe Day)
+specifiedStartEndDates ropts = do
+  today <- getCurrentDay
+  let
+    q = queryFromOpts today ropts
+    mspecifiedstartdate = queryStartDate False q
+    mspecifiedenddate   = queryEndDate   False q
+  return (mspecifiedstartdate, mspecifiedenddate)
+
+specifiedStartDate :: ReportOpts -> IO (Maybe Day)
+specifiedStartDate ropts = fst <$> specifiedStartEndDates ropts
+
+specifiedEndDate :: ReportOpts -> IO (Maybe Day)
+specifiedEndDate ropts = snd <$> specifiedStartEndDates ropts
+
+-- tests
+
+tests_ReportOptions = tests "ReportOptions" [
+   tests "queryFromOpts" [
+      (queryFromOpts nulldate defreportopts) `is` Any
+     ,(queryFromOpts nulldate defreportopts{query_="a"}) `is` (Acct "a")
+     ,(queryFromOpts nulldate defreportopts{query_="desc:'a a'"}) `is` (Desc "a a")
+     ,(queryFromOpts nulldate defreportopts{period_=PeriodFrom (parsedate "2012/01/01"),query_="date:'to 2013'" }) 
+      `is` (Date $ mkdatespan "2012/01/01" "2013/01/01")
+     ,(queryFromOpts nulldate defreportopts{query_="date2:'in 2012'"}) `is` (Date2 $ mkdatespan "2012/01/01" "2013/01/01")
+     ,(queryFromOpts nulldate defreportopts{query_="'a a' 'b"}) `is` (Or [Acct "a a", Acct "'b"])
+     ]
+
+  ,tests "queryOptsFromOpts" [
+      (queryOptsFromOpts nulldate defreportopts) `is` []
+     ,(queryOptsFromOpts nulldate defreportopts{query_="a"}) `is` []
+     ,(queryOptsFromOpts nulldate defreportopts{period_=PeriodFrom (parsedate "2012/01/01")
+                                                                   ,query_="date:'to 2013'"
+                                                                   })
+      `is` []
+    ]
  ]
 
-
-tests_Hledger_Reports_ReportOptions :: Test
-tests_Hledger_Reports_ReportOptions = TestList $
-    tests_queryFromOpts
- ++ tests_queryOptsFromOpts

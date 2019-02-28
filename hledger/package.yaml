@@ -1,5 +1,5 @@
 name: hledger
-version: '1.0.1'
+version: 1.13.99
 synopsis: Command-line interface for the hledger accounting tool
 description: |
   This is hledger's command-line interface.
@@ -13,42 +13,75 @@ description: |
   interfaces, and aims to be a reliable, practical tool for daily
   use.
 category: Finance, Console
-license: GPL
+license: GPL-3
 author: Simon Michael <simon@joyful.com>
 maintainer: Simon Michael <simon@joyful.com>
 github: simonmichael/hledger
 homepage: http://hledger.org
 bug-reports: http://bugs.hledger.org
+stability: stable
+tested-with: GHC==7.10.3, GHC==8.0.2, GHC==8.2.2, GHC==8.4.3
+
 extra-source-files:
-- CHANGES
+- CHANGES.md
 - README.md
 - test/test.hs
 - bench/10000x1000x10.journal
-data-files:
-- doc/hledger.1
-- doc/hledger.1.txt
-- doc/hledger.1.info
-- doc/other/hledger-api.1
-- doc/other/hledger-api.1.txt
-- doc/other/hledger-api.1.info
-- doc/other/hledger-ui.1
-- doc/other/hledger-ui.1.txt
-- doc/other/hledger-ui.1.info
-- doc/other/hledger-web.1
-- doc/other/hledger-web.1.txt
-- doc/other/hledger-web.1.info
-- doc/other/hledger_journal.5
-- doc/other/hledger_journal.5.txt
-- doc/other/hledger_journal.5.info
-- doc/other/hledger_csv.5
-- doc/other/hledger_csv.5.txt
-- doc/other/hledger_csv.5.info
-- doc/other/hledger_timeclock.5
-- doc/other/hledger_timeclock.5.txt
-- doc/other/hledger_timeclock.5.info
-- doc/other/hledger_timedot.5
-- doc/other/hledger_timedot.5.txt
-- doc/other/hledger_timedot.5.info
+- hledger.1
+- hledger.txt
+- hledger.info
+- embeddedfiles/hledger.1
+- embeddedfiles/hledger.txt
+- embeddedfiles/hledger.info
+- embeddedfiles/hledger-api.1
+- embeddedfiles/hledger-api.txt
+- embeddedfiles/hledger-api.info
+- embeddedfiles/hledger-ui.1
+- embeddedfiles/hledger-ui.txt
+- embeddedfiles/hledger-ui.info
+- embeddedfiles/hledger-web.1
+- embeddedfiles/hledger-web.txt
+- embeddedfiles/hledger-web.info
+- embeddedfiles/hledger_journal.5
+- embeddedfiles/hledger_journal.txt
+- embeddedfiles/hledger_journal.info
+- embeddedfiles/hledger_csv.5
+- embeddedfiles/hledger_csv.txt
+- embeddedfiles/hledger_csv.info
+- embeddedfiles/hledger_timeclock.5
+- embeddedfiles/hledger_timeclock.txt
+- embeddedfiles/hledger_timeclock.info
+- embeddedfiles/hledger_timedot.5
+- embeddedfiles/hledger_timedot.txt
+- embeddedfiles/hledger_timedot.info
+- Hledger/Cli/Commands/Accounts.txt
+- Hledger/Cli/Commands/Activity.txt
+- Hledger/Cli/Commands/Add.txt
+- Hledger/Cli/Commands/Balance.txt
+- Hledger/Cli/Commands/Balancesheet.txt
+- Hledger/Cli/Commands/Balancesheetequity.txt
+- Hledger/Cli/Commands/Cashflow.txt
+- Hledger/Cli/Commands/Checkdates.txt
+- Hledger/Cli/Commands/Checkdupes.txt
+- Hledger/Cli/Commands/Close.txt
+- Hledger/Cli/Commands/Files.txt
+- Hledger/Cli/Commands/Help.txt
+- Hledger/Cli/Commands/Import.txt
+- Hledger/Cli/Commands/Incomestatement.txt
+- Hledger/Cli/Commands/Prices.txt
+- Hledger/Cli/Commands/Print.txt
+- Hledger/Cli/Commands/Printunique.txt
+- Hledger/Cli/Commands/Register.txt
+- Hledger/Cli/Commands/Registermatch.txt
+- Hledger/Cli/Commands/Rewrite.txt
+- Hledger/Cli/Commands/Roi.txt
+- Hledger/Cli/Commands/Stats.txt
+- Hledger/Cli/Commands/Tags.txt
+- Hledger/Cli/Commands/Test.txt
+
+
+#data-files:
+
 flags:
   terminfo:
     description: On POSIX systems, build with the terminfo lib for detecting terminal width.
@@ -58,20 +91,7 @@ flags:
     description: Build with support for multithreaded execution
     manual: false
     default: true
-  oldtime:
-    description: If building with time < 1.5, also depend on old-locale. Set automatically by cabal.
-    manual: false
-    default: false
-dependencies:
-- base >=4.8 && <5
-- base-compat >=0.8.1
-- directory
-- file-embed >=0.0.10 && <0.1
-- filepath
-- pretty-show >=1.6.4
-- process
-- temporary
-- tabular >=0.2 && <0.3
+
 ghc-options:
 - -Wall
 - -fno-warn-unused-do-bind
@@ -79,195 +99,117 @@ ghc-options:
 - -fno-warn-missing-signatures
 - -fno-warn-type-defaults
 - -fno-warn-orphans
+# avoid "non-portable path" warning on mac, https://github.com/commercialhaskell/stack/issues/3918
+- -optP-Wno-nonportable-include-path
+
+dependencies:
+- hledger-lib >=1.13.99 && <1.14
+- ansi-terminal >=0.6.2.3
+- base >=4.8 && <4.13
+- base-compat-batteries >=0.10.1 && <0.11
+- bytestring
+- cmdargs >=0.10
+- containers
+- data-default >=0.5
+- Decimal
+- directory
+- easytest
+- filepath
+- haskeline >=0.6
+- megaparsec >=7.0.0 && <8
+- mtl
+- mtl-compat
+- old-time
+- parsec >=3
+- pretty-show >=1.6.4
+- process
+- regex-tdfa
+- safe >=0.2
+- shakespeare >=2.0.2.2
+- split >=0.1
+- math-functions >=0.2.0.0
+- tabular >=0.2
+- temporary
+- text >=0.11
+- time >=1.5
+- transformers
+- unordered-containers
+- utf8-string >=0.3.5
+- utility-ht >=0.0.13
+- wizards >=1.0
+
+when:
+- condition: (!(os(windows))) && (flag(terminfo))
+  dependencies:
+  - terminfo
+
 library:
-  cpp-options: -DVERSION="1.0.1"
+  cpp-options: -DVERSION="1.13.99"
   exposed-modules:
   - Hledger.Cli
   - Hledger.Cli.Main
   - Hledger.Cli.CliOptions
   - Hledger.Cli.DocFiles
-  - Hledger.Cli.Tests
   - Hledger.Cli.Utils
   - Hledger.Cli.Version
-  - Hledger.Cli.Add
-  - Hledger.Cli.Accounts
-  - Hledger.Cli.Balance
-  - Hledger.Cli.Balancesheet
-  - Hledger.Cli.Cashflow
-  - Hledger.Cli.Help
-  - Hledger.Cli.Histogram
-  - Hledger.Cli.Incomestatement
-  - Hledger.Cli.Info
-  - Hledger.Cli.Man
-  - Hledger.Cli.Print
-  - Hledger.Cli.Register
-  - Hledger.Cli.Stats
-  - Text.Tabular.AsciiWide
+  - Hledger.Cli.Commands
+  - Hledger.Cli.Commands.Accounts
+  - Hledger.Cli.Commands.Activity
+  - Hledger.Cli.Commands.Add
+  - Hledger.Cli.Commands.Balance
+  - Hledger.Cli.Commands.Balancesheet
+  - Hledger.Cli.Commands.Balancesheetequity
+  - Hledger.Cli.Commands.Cashflow
+  - Hledger.Cli.Commands.Checkdates
+  - Hledger.Cli.Commands.Checkdupes
+  - Hledger.Cli.Commands.Close
+  - Hledger.Cli.Commands.Commodities
+  - Hledger.Cli.Commands.Help
+  - Hledger.Cli.Commands.Files
+  - Hledger.Cli.Commands.Import
+  - Hledger.Cli.Commands.Incomestatement
+  - Hledger.Cli.Commands.Prices
+  - Hledger.Cli.Commands.Print
+  - Hledger.Cli.Commands.Printunique
+  - Hledger.Cli.Commands.Register
+  - Hledger.Cli.Commands.Registermatch
+  - Hledger.Cli.Commands.Rewrite
+  - Hledger.Cli.Commands.Roi
+  - Hledger.Cli.Commands.Stats
+  - Hledger.Cli.Commands.Tags
+  - Hledger.Cli.CompoundBalanceCommand
   dependencies:
-  - hledger-lib >= 1.0.1 && < 1.1
-  - bytestring
-  - containers
-  - unordered-containers
-  - cmdargs >=0.10 && <0.11
-  - csv
-  - data-default >=0.5
+  - Diff
   - hashable >=1.2.4
-  - haskeline >=0.6 && <=0.8
-  - HUnit
-  - mtl
-  - mtl-compat
-  - old-time
-  - megaparsec >=5.0 && < 5.2
-  - regex-tdfa
-  - safe >=0.2
-  - split >=0.1 && <0.3
-  - transformers
-  - text >=0.11
-  - utf8-string >=0.3.5 && <1.1
-  - wizards ==1.0.*
-  when:
-  - condition: impl(ghc <7.6)
-    dependencies:
-    - ghc-prim
-  - condition: impl(ghc >=7.10)
-    then:
-      dependencies:
-      - shakespeare >=2.0.2.2 && <2.1
-    else:
-      dependencies:
-      - shakespeare >=1.0 && <2.1
-      - shakespeare-text >=1.0 && <1.2
-  - condition: flag(oldtime)
-    then:
-      dependencies:
-      - time <1.5
-      - old-locale
-    else:
-      dependencies:
-      - time >=1.5
-  - condition: (!(os(windows))) && (flag(terminfo))
-    dependencies:
-    - terminfo
+  - lucid
+
 executables:
   hledger:
-    main: hledger-cli.hs
     source-dirs: app
-    cpp-options: -DVERSION="1.0.1"
-    dependencies:
-    - hledger-lib >= 1.0.1 && < 1.1
-    - hledger == 1.0.1
-    - bytestring
-    - containers
-    - unordered-containers
-    - cmdargs >=0.10 && <0.11
-    - csv
-    - data-default >=0.5
-    - haskeline >=0.6 && <=0.8
-    - HUnit
-    - mtl
-    - mtl-compat
-    - old-time
-    - parsec >=3
-    - regex-tdfa
-    - safe >=0.2
-    - split >=0.1 && <0.3
-    - text >=0.11
-    - utf8-string >=0.3.5 && <1.1
-    - wizards ==1.0.*
+    main: hledger-cli.hs
+    cpp-options: -DVERSION="1.13.99"
     when:
     - condition: flag(threaded)
       ghc-options: -threaded
-    - condition: impl(ghc <7.6)
-      dependencies:
-      - ghc-prim
-    - condition: impl(ghc >=7.10)
-      then:
-        dependencies:
-        - shakespeare >=2.0.2.2 && <2.1
-      else:
-        dependencies:
-        - shakespeare >=1.0 && <2.1
-        - shakespeare-text >=1.0 && <1.2
-    - condition: flag(oldtime)
-      then:
-        dependencies:
-        - time <1.5
-        - old-locale
-      else:
-        dependencies:
-        - time >=1.5
-    - condition: (!(os(windows))) && (flag(terminfo))
-      dependencies:
-      - terminfo
+    dependencies:
+    - hledger
+
 tests:
   test:
-    main: test.hs
     source-dirs: test
-    cpp-options: -DVERSION="1.0.1"
+    main: test.hs
+    cpp-options: -DVERSION="1.13.99"
     dependencies:
-    - hledger-lib >= 1.0.1 && < 1.1
-    - hledger == 1.0.1
-    - bytestring
-    - containers
-    - unordered-containers
-    - cmdargs >=0.10 && <0.11
-    - csv
-    - data-default >=0.5
-    - haskeline >=0.6 && <=0.8
-    - HUnit
-    - mtl
-    - mtl-compat
-    - old-time
-    - parsec >=3
-    - regex-tdfa
-    - safe >=0.2
-    - split >=0.1 && <0.3
-    - text >=0.11
-    - utf8-string >=0.3.5 && <1.1
-    - wizards ==1.0.*
+    - hledger
     - test-framework
     - test-framework-hunit
-    when:
-    - condition: impl(ghc <7.6)
-      dependencies:
-      - ghc-prim
-    - condition: impl(ghc >=7.10)
-      then:
-        dependencies:
-        - shakespeare >=2.0.2.2 && <2.1
-      else:
-        dependencies:
-        - shakespeare >=1.0 && <2.1
-        - shakespeare-text >=1.0 && <1.2
-    - condition: flag(oldtime)
-      then:
-        dependencies:
-        - time <1.5
-        - old-locale
-      else:
-        dependencies:
-        - time >=1.5
-    - condition: (!(os(windows))) && (flag(terminfo))
-      dependencies:
-      - terminfo
+
 benchmarks:
   bench:
-    main: bench.hs
     source-dirs: bench
+    main: bench.hs
     dependencies:
-    - hledger-lib >= 1.0.1 && < 1.1
-    - hledger == 1.0.1
+    - hledger
     - criterion
     - html
     - timeit
-    when:
-    - condition: flag(oldtime)
-      then:
-        dependencies:
-        - time <1.5
-        - old-locale
-      else:
-        dependencies:
-        - time >=1.5
-stability: stable
-tested-with: GHC==7.10.3, GHC==8.0

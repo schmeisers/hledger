@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-|
 
 The Hledger.Data library allows parsing and querying of C++ ledger-style
@@ -15,17 +16,19 @@ module Hledger.Data (
                module Hledger.Data.Dates,
                module Hledger.Data.Journal,
                module Hledger.Data.Ledger,
+               module Hledger.Data.MarketPrice,
                module Hledger.Data.Period,
+               module Hledger.Data.PeriodicTransaction,
                module Hledger.Data.Posting,
                module Hledger.Data.RawOptions,
                module Hledger.Data.StringFormat,
                module Hledger.Data.Timeclock,
                module Hledger.Data.Transaction,
+               module Hledger.Data.TransactionModifier,
                module Hledger.Data.Types,
-               tests_Hledger_Data
+               tests_Data
               )
 where
-import Test.HUnit
 
 import Hledger.Data.Account
 import Hledger.Data.AccountName
@@ -34,27 +37,25 @@ import Hledger.Data.Commodity
 import Hledger.Data.Dates
 import Hledger.Data.Journal
 import Hledger.Data.Ledger
+import Hledger.Data.MarketPrice
 import Hledger.Data.Period
+import Hledger.Data.PeriodicTransaction
 import Hledger.Data.Posting
 import Hledger.Data.RawOptions
 import Hledger.Data.StringFormat
 import Hledger.Data.Timeclock
 import Hledger.Data.Transaction
+import Hledger.Data.TransactionModifier
 import Hledger.Data.Types
+import Hledger.Utils.Test
 
-tests_Hledger_Data :: Test
-tests_Hledger_Data = TestList
-    [
-     tests_Hledger_Data_Account
-    ,tests_Hledger_Data_AccountName
-    ,tests_Hledger_Data_Amount
-    ,tests_Hledger_Data_Commodity
-    ,tests_Hledger_Data_Journal
-    ,tests_Hledger_Data_Ledger
-    ,tests_Hledger_Data_Posting
-    -- ,tests_Hledger_Data_RawOptions
-    -- ,tests_Hledger_Data_StringFormat
-    ,tests_Hledger_Data_Timeclock
-    ,tests_Hledger_Data_Transaction
-    -- ,tests_Hledger_Data_Types
-    ]
+tests_Data = tests "Data" [
+   tests_AccountName
+  ,tests_Amount
+  ,tests_Journal
+  ,tests_Ledger
+  ,tests_Posting
+  ,tests_StringFormat
+  ,tests_Timeclock
+  ,tests_Transaction
+  ]

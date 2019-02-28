@@ -1,9 +1,9 @@
-{-# LANGUAGE CPP #-}
 {-|
 
 A reader for CSV data, using an extra rules file to help interpret the data.
 
 -}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -11,34 +11,40 @@ A reader for CSV data, using an extra rules file to help interpret the data.
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE PackageImports #-}
 
 module Hledger.Read.CsvReader (
   -- * Reader
   reader,
   -- * Misc.
   CsvRecord,
+  CSV, Record, Field,
   -- rules,
   rulesFileFor,
   parseRulesFile,
+  parseAndValidateCsvRules,
+  expandIncludes,
   transactionFromCsvRecord,
+  printCSV,
   -- * Tests
-  tests_Hledger_Read_CsvReader
+  tests_CsvReader,
 )
 where
 import Prelude ()
-import Prelude.Compat hiding (getContents)
+import "base-compat-batteries" Prelude.Compat
 import Control.Exception hiding (try)
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.State.Strict (StateT, get, modify', evalStateT)
--- import Test.HUnit
-import Data.Char (toLower, isDigit, isSpace)
-import Data.List.Compat
+import Data.Char (toLower, isDigit, isSpace, ord)
+import "base-compat-batteries" Data.List.Compat
 import Data.Maybe
 import Data.Ord
 import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
+import qualified Data.Text.IO as T
 import Data.Time.Calendar (Day)
 #if MIN_VERSION_time(1,5,0)
 import Data.Time.Format (parseTimeM, defaultTimeLocale)
@@ -49,19 +55,28 @@ import System.Locale (defaultTimeLocale)
 import Safe
 import System.Directory (doesFileExist)
 import System.FilePath
-import System.IO (stderr)
-import Test.HUnit hiding (State)
-import Text.CSV (parseCSV, CSV)
-import Text.Megaparsec hiding (parse, State)
-import Text.Megaparsec.Text
-import qualified Text.Parsec as Parsec
-import Text.Printf (hPrintf,printf)
+import qualified Data.Csv as Cassava
+import qualified Data.Csv.Parser.Megaparsec as CassavaMP
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
+import Data.Foldable
+import Text.Megaparsec hiding (parse)
+import Text.Megaparsec.Char
+import Text.Megaparsec.Custom
+import Text.Printf (printf)
 
 import Hledger.Data
-import Hledger.Utils.UTF8IOCompat (getContents)
 import Hledger.Utils
-import Hledger.Read.Common (amountp, statusp, genericSourcePos)
+import Hledger.Read.Common (Reader(..),InputOpts(..),amountp, statusp, genericSourcePos)
 
+type CSV = [Record]
+
+type Record = [Field]
+
+type Field = String
+
+data CSVError = CSVError (ParseErrorBundle BL.ByteString CassavaMP.ConversionError)
+    deriving Show
 
 reader :: Reader
 reader = Reader
@@ -73,9 +88,11 @@ reader = Reader
 
 -- | Parse and post-process a "Journal" from CSV data, or give an error.
 -- XXX currently ignores the string and reads from the file path
-parse :: Maybe FilePath -> Bool -> FilePath -> Text -> ExceptT String IO Journal
-parse rulesfile _ f t = do
-  r <- liftIO $ readJournalFromCsv rulesfile f t
+parse :: InputOpts -> FilePath -> Text -> ExceptT String IO Journal
+parse iopts f t = do
+  let rulesfile = mrules_file_ iopts
+  let separator = separator_ iopts
+  r <- liftIO $ readJournalFromCsv separator rulesfile f t
   case r of Left e -> throwError e
             Right j -> return $ journalNumberAndTieTransactions j
 -- XXX does not use parseAndFinaliseJournal like the other readers
@@ -83,28 +100,30 @@ parse rulesfile _ f t = do
 -- | Read a Journal from the given CSV data (and filename, used for error
 -- messages), or return an error. Proceed as follows:
 -- @
--- 1. parse the CSV data
--- 2. identify the name of a file specifying conversion rules: either use
--- the name provided, derive it from the CSV filename, or raise an error
--- if the CSV filename is -.
--- 3. auto-create the rules file with default rules if it doesn't exist
--- 4. parse the rules file
--- 5. convert the CSV records to a journal using the rules
+-- 1. parse CSV conversion rules from the specified rules file, or from
+--    the default rules file for the specified CSV file, if it exists,
+--    or throw a parse error; if it doesn't exist, use built-in default rules
+-- 2. parse the CSV data, or throw a parse error
+-- 3. convert the CSV records to transactions using the rules
+-- 4. if the rules file didn't exist, create it with the default rules and filename
+-- 5. return the transactions as a Journal
 -- @
-readJournalFromCsv :: Maybe FilePath -> FilePath -> Text -> IO (Either String Journal)
-readJournalFromCsv Nothing "-" _ = return $ Left "please use --rules-file when reading CSV from stdin"
-readJournalFromCsv mrulesfile csvfile csvdata =
+readJournalFromCsv :: Char -> Maybe FilePath -> FilePath -> Text -> IO (Either String Journal)
+readJournalFromCsv _ Nothing "-" _ = return $ Left "please use --rules-file when reading CSV from stdin"
+readJournalFromCsv separator mrulesfile csvfile csvdata =
  handle (\e -> return $ Left $ show (e :: IOException)) $ do
   let throwerr = throw.userError
 
   -- parse rules
   let rulesfile = fromMaybe (rulesFileFor csvfile) mrulesfile
   rulesfileexists <- doesFileExist rulesfile
-  when rulesfileexists $ hPrintf stderr "using conversion rules file %s\n" rulesfile
-  rules <-
+  rulestext <-
     if rulesfileexists
-    then liftIO (runExceptT $ parseRulesFile rulesfile) >>= either throwerr return
-    else return defaultRules
+    then do
+      dbg1IO "using conversion rules file" rulesfile
+      liftIO $ (readFilePortably rulesfile >>= expandIncludes (takeDirectory rulesfile))
+    else return $ defaultRulesText rulesfile
+  rules <- liftIO (runExceptT $ parseAndValidateCsvRules rulesfile rulestext) >>= either throwerr return
   dbg2IO "rules" rules
 
   -- apply skip directive
@@ -114,53 +133,93 @@ readJournalFromCsv mrulesfile csvfile csvdata =
           oneorerror s  = readDef (throwerr $ "could not parse skip value: " ++ show s) s
 
   -- parse csv
-  -- parsec seems to fail if you pass it "-" here
+  -- parsec seems to fail if you pass it "-" here XXX try again with megaparsec
   let parsecfilename = if csvfile == "-" then "(stdin)" else csvfile
   records <- (either throwerr id .
               dbg2 "validateCsv" . validateCsv skip .
               dbg2 "parseCsv")
-             `fmap` parseCsv parsecfilename (T.unpack csvdata)
+             `fmap` parseCsv separator parsecfilename csvdata
   dbg1IO "first 3 csv records" $ take 3 records
 
   -- identify header lines
   -- let (headerlines, datalines) = identifyHeaderLines records
   --     mfieldnames = lastMay headerlines
 
-  -- convert to transactions and return as a journal
-  let txns = snd $ mapAccumL
-                     (\pos r -> (pos,
-                                 transactionFromCsvRecord
-                                   (let SourcePos name line col =  pos in
-                                    SourcePos name (unsafePos $ unPos line + 1) col)
-                                   rules
-                                    r))
-                     (initialPos parsecfilename) records
+  let
+    -- convert CSV records to transactions
+    txns = snd $ mapAccumL
+                   (\pos r ->
+                      let
+                        SourcePos name line col = pos
+                        line' = (mkPos . (+1) . unPos) line
+                        pos' = SourcePos name line' col
+                      in
+                        (pos, transactionFromCsvRecord pos' rules r)
+                   )
+                   (initialPos parsecfilename) records
 
-  -- heuristic: if the records appear to have been in reverse date order,
-  -- reverse them all as well as doing a txn date sort,
-  -- so that same-day txns' original order is preserved
-      txns' | length txns > 1 && tdate (head txns) > tdate (last txns) = reverse txns
-            | otherwise = txns
+    -- Ensure transactions are ordered chronologically.
+    -- First, reverse them to get same-date transactions ordered chronologically,
+    -- if the CSV records seem to be most-recent-first, ie if there's an explicit
+    -- "newest-first" directive, or if there's more than one date and the first date
+    -- is more recent than the last.
+    txns' =
+      (if newestfirst || mseemsnewestfirst == Just True then reverse else id) txns
+      where
+        newestfirst = dbg3 "newestfirst" $ isJust $ getDirective "newest-first" rules
+        mseemsnewestfirst = dbg3 "mseemsnewestfirst" $
+          case nub $ map tdate txns of
+            ds | length ds > 1 -> Just $ head ds > last ds
+            _                  -> Nothing
+    -- Second, sort by date.
+    txns'' = sortBy (comparing tdate) txns'
 
   when (not rulesfileexists) $ do
-    hPrintf stderr "created default conversion rules file %s, edit this for better results\n" rulesfile
-    writeFile rulesfile $ T.unpack $ defaultRulesText rulesfile
+    dbg1IO "creating conversion rules file" rulesfile
+    writeFile rulesfile $ T.unpack rulestext
 
-  return $ Right nulljournal{jtxns=sortBy (comparing tdate) txns'}
+  return $ Right nulljournal{jtxns=txns''}
 
-parseCsv :: FilePath -> String -> IO (Either Parsec.ParseError CSV)
-parseCsv path csvdata =
-  case path of
-    "-" -> liftM (parseCSV "(stdin)") getContents
-    _   -> return $ parseCSV path csvdata
+parseCsv :: Char -> FilePath -> Text -> IO (Either CSVError CSV)
+parseCsv separator filePath csvdata =
+  case filePath of
+    "-" -> liftM (parseCassava separator "(stdin)") T.getContents
+    _   -> return $ parseCassava separator filePath csvdata
 
--- | Return the cleaned up and validated CSV data, or an error.
-validateCsv :: Int -> Either Parsec.ParseError CSV -> Either String [CsvRecord]
+parseCassava :: Char -> FilePath -> Text -> Either CSVError CSV
+parseCassava separator path content =
+    case parseResult of
+        Left  msg -> Left $ CSVError msg
+        Right a   -> Right a
+    where parseResult = fmap parseResultToCsv $ CassavaMP.decodeWith (decodeOptions separator) Cassava.NoHeader path lazyContent
+          lazyContent = BL.fromStrict $ T.encodeUtf8 content
+
+decodeOptions :: Char -> Cassava.DecodeOptions
+decodeOptions separator = Cassava.defaultDecodeOptions {
+                      Cassava.decDelimiter = fromIntegral (ord separator)
+                    }
+
+parseResultToCsv :: (Foldable t, Functor t) => t (t B.ByteString) -> CSV
+parseResultToCsv = toListList . unpackFields
+    where
+        toListList = toList . fmap toList
+        unpackFields  = (fmap . fmap) (T.unpack . T.decodeUtf8)
+
+printCSV :: CSV -> String
+printCSV records = unlined (printRecord `map` records)
+    where printRecord = concat . intersperse "," . map printField
+          printField f = "\"" ++ concatMap escape f ++ "\""
+          escape '"' = "\"\""
+          escape x = [x]
+          unlined = concat . intersperse "\n"
+
+-- | Return the cleaned up and validated CSV data (can be empty), or an error.
+validateCsv :: Int -> Either CSVError CSV -> Either String [CsvRecord]
 validateCsv _ (Left e) = Left $ show e
 validateCsv numhdrlines (Right rs) = validate $ drop numhdrlines $ filternulls rs
   where
     filternulls = filter (/=[""])
-    validate [] = Left "no CSV records found"
+    validate [] = Right []
     validate rs@(first:_)
       | isJust lessthan2 = let r = fromJust lessthan2 in Left $ printf "CSV record %s has less than two fields" (show r)
       | isJust different = let r = fromJust different in Left $ printf "the first CSV record %s has %d fields but %s has %d" (show first) length1 (show r) (length r)
@@ -205,6 +264,7 @@ defaultRulesText csvfile = T.pack $ unlines
   ,"fields date, description, amount"
   ,""
   ,"#skip 1"
+  ,"#newest-first"
   ,""
   ,"#date-format %-d/%-m/%Y"
   ,"#date-format %-m/%-d/%Y"
@@ -219,13 +279,6 @@ defaultRulesText csvfile = T.pack $ unlines
   ," account2 assets:bank:savings\n"
   ]
 
-defaultRules :: CsvRules
-defaultRules =
-  either
-    (error' "Could not parse the default CSV rules, this should not happen")
-    id
-    $ parseCsvRules "" $ defaultRulesText ""
-
 --------------------------------------------------------------------------------
 -- Conversion rules parsing
 
@@ -234,7 +287,7 @@ Grammar for the CSV conversion rules, more or less:
 
 RULES: RULE*
 
-RULE: ( FIELD-LIST | FIELD-ASSIGNMENT | CONDITIONAL-BLOCK | SKIP | DATE-FORMAT | COMMENT | BLANK ) NEWLINE
+RULE: ( FIELD-LIST | FIELD-ASSIGNMENT | CONDITIONAL-BLOCK | SKIP | NEWEST-FIRST | DATE-FORMAT | COMMENT | BLANK ) NEWLINE
 
 FIELD-LIST: fields SPACE FIELD-NAME ( SPACE? , SPACE? FIELD-NAME )*
 
@@ -303,7 +356,7 @@ data CsvRules = CsvRules {
   rconditionalblocks :: [ConditionalBlock]
 } deriving (Show, Eq)
 
-type CsvRulesParser a = StateT CsvRules Parser a
+type CsvRulesParser a = StateT CsvRules SimpleTextParser a
 
 type DirectiveName    = String
 type CsvFieldName     = String
@@ -351,36 +404,45 @@ getDirective directivename = lookup directivename . rdirectives
 instance ShowErrorComponent String where
   showErrorComponent = id
 
+-- | An error-throwing action that parses this file's content
+-- as CSV conversion rules, interpolating any included files first,
+-- and runs some extra validation checks.
 parseRulesFile :: FilePath -> ExceptT String IO CsvRules
-parseRulesFile f = do
-  s <- liftIO $ (readFile' f >>= expandIncludes (takeDirectory f))
-  let rules = parseCsvRules f s
+parseRulesFile f =
+  liftIO (readFilePortably f >>= expandIncludes (takeDirectory f)) >>= parseAndValidateCsvRules f
+
+-- | Inline all files referenced by include directives in this hledger CSV rules text, recursively.
+-- Included file paths may be relative to the directory of the provided file path.
+-- This is a cheap hack to avoid rewriting the CSV rules parser.
+expandIncludes dir content = mapM (expandLine dir) (T.lines content) >>= return . T.unlines
+  where
+    expandLine dir line =
+      case line of
+        (T.stripPrefix "include " -> Just f) -> expandIncludes dir' =<< T.readFile f'
+          where
+            f' = dir </> dropWhile isSpace (T.unpack f)
+            dir' = takeDirectory f'
+        _ -> return line
+
+-- | An error-throwing action that parses this text as CSV conversion rules
+-- and runs some extra validation checks. The file path is for error messages.
+parseAndValidateCsvRules :: FilePath -> T.Text -> ExceptT String IO CsvRules
+parseAndValidateCsvRules rulesfile s = do
+  let rules = parseCsvRules rulesfile s
   case rules of
-    Left e -> ExceptT $ return $ Left $ parseErrorPretty e
+    Left e -> ExceptT $ return $ Left $ customErrorBundlePretty e
     Right r -> do
                r_ <- liftIO $ runExceptT $ validateRules r
                ExceptT $ case r_ of
-                 Left e -> return $ Left $ parseErrorPretty $ toParseError e
+                 Left  s -> return $ Left $ parseErrorPretty $ makeParseError s
                  Right r -> return $ Right r
+
   where
-    toParseError :: forall s. Ord s => s -> ParseError Char s
-    toParseError s = (mempty :: ParseError Char s) { errorCustom = S.singleton s}
+    makeParseError :: String -> ParseError T.Text String
+    makeParseError s = FancyError 0 (S.singleton $ ErrorFail s)
 
--- | Pre-parse csv rules to interpolate included files, recursively.
--- This is a cheap hack to avoid rewriting the existing parser.
-expandIncludes :: FilePath -> T.Text -> IO T.Text
-expandIncludes basedir content = do
-  let (ls,rest) = break (T.isPrefixOf "include") $ T.lines content
-  case rest of
-    [] -> return $ T.unlines ls
-    ((T.stripPrefix "include" -> Just f):ls') -> do
-      let f'       = basedir </> dropWhile isSpace (T.unpack f)
-          basedir' = takeDirectory f'
-      included <- readFile' f' >>= expandIncludes basedir'
-      return $ T.unlines [T.unlines ls, included, T.unlines ls']
-    ls' -> return $ T.unlines $ ls ++ ls'   -- should never get here
-
-parseCsvRules :: FilePath -> T.Text -> Either (ParseError Char Dec) CsvRules
+-- | Parse this text as CSV conversion rules. The file path is for error messages.
+parseCsvRules :: FilePath -> T.Text -> Either (ParseErrorBundle T.Text CustomErr) CsvRules
 -- parseCsvRules rulesfile s = runParser csvrulesfile nullrules{baseAccount=takeBaseName rulesfile} rulesfile s
 parseCsvRules rulesfile s =
   runParser (evalStateT rulesp rules) rulesfile s
@@ -418,24 +480,24 @@ rulesp = do
           }
 
 blankorcommentlinep :: CsvRulesParser ()
-blankorcommentlinep = lift (pdbg 3 "trying blankorcommentlinep") >> choiceInState [blanklinep, commentlinep]
+blankorcommentlinep = lift (dbgparse 3 "trying blankorcommentlinep") >> choiceInState [blanklinep, commentlinep]
 
 blanklinep :: CsvRulesParser ()
-blanklinep = lift (many spacenonewline) >> newline >> return () <?> "blank line"
+blanklinep = lift (skipMany spacenonewline) >> newline >> return () <?> "blank line"
 
 commentlinep :: CsvRulesParser ()
-commentlinep = lift (many spacenonewline) >> commentcharp >> lift restofline >> return () <?> "comment line"
+commentlinep = lift (skipMany spacenonewline) >> commentcharp >> lift restofline >> return () <?> "comment line"
 
 commentcharp :: CsvRulesParser Char
 commentcharp = oneOf (";#*" :: [Char])
 
 directivep :: CsvRulesParser (DirectiveName, String)
 directivep = (do
-  lift $ pdbg 3 "trying directive"
-  d <- choiceInState $ map string directives
+  lift $ dbgparse 3 "trying directive"
+  d <- fmap T.unpack $ choiceInState $ map (lift . string . T.pack) directives
   v <- (((char ':' >> lift (many spacenonewline)) <|> lift (some spacenonewline)) >> directivevalp)
-       <|> (optional (char ':') >> lift (many spacenonewline) >> lift eolof >> return "")
-  return (d,v)
+       <|> (optional (char ':') >> lift (skipMany spacenonewline) >> lift eolof >> return "")
+  return (d, v)
   ) <?> "directive"
 
 directives =
@@ -444,20 +506,21 @@ directives =
   -- ,"default-currency"
   -- ,"skip-lines" -- old
   ,"skip"
+  ,"newest-first"
    -- ,"base-account"
    -- ,"base-currency"
   ]
 
 directivevalp :: CsvRulesParser String
-directivevalp = anyChar `manyTill` lift eolof
+directivevalp = anySingle `manyTill` lift eolof
 
 fieldnamelistp :: CsvRulesParser [CsvFieldName]
 fieldnamelistp = (do
-  lift $ pdbg 3 "trying fieldnamelist"
+  lift $ dbgparse 3 "trying fieldnamelist"
   string "fields"
   optional $ char ':'
-  lift (some spacenonewline)
-  let separator = lift (many spacenonewline) >> char ',' >> lift (many spacenonewline)
+  lift (skipSome spacenonewline)
+  let separator = lift (skipMany spacenonewline) >> char ',' >> lift (skipMany spacenonewline)
   f <- fromMaybe "" <$> optional fieldnamep
   fs <- some $ (separator >> fromMaybe "" <$> optional fieldnamep)
   lift restofline
@@ -479,7 +542,7 @@ barefieldnamep = some $ noneOf (" \t\n,;#~" :: [Char])
 
 fieldassignmentp :: CsvRulesParser (JournalFieldName, FieldTemplate)
 fieldassignmentp = do
-  lift $ pdbg 3 "trying fieldassignmentp"
+  lift $ dbgparse 3 "trying fieldassignmentp"
   f <- journalfieldnamep
   assignmentseparatorp
   v <- fieldvalp
@@ -487,47 +550,51 @@ fieldassignmentp = do
   <?> "field assignment"
 
 journalfieldnamep :: CsvRulesParser String
-journalfieldnamep = lift (pdbg 2 "trying journalfieldnamep") >> choiceInState (map string journalfieldnames)
+journalfieldnamep = do
+  lift (dbgparse 2 "trying journalfieldnamep")
+  T.unpack <$> choiceInState (map (lift . string . T.pack) journalfieldnames)
 
-journalfieldnames =
-  [-- pseudo fields:
-   "amount-in"
+-- Transaction fields and pseudo fields for CSV conversion.
+-- Names must precede any other name they contain, for the parser
+-- (amount-in before amount; date2 before date). TODO: fix
+journalfieldnames = [
+   "account1"
+  ,"account2"
+  ,"amount-in"
   ,"amount-out"
+  ,"amount"
+  ,"balance"
+  ,"code"
+  ,"comment"
   ,"currency"
-   -- standard fields:
   ,"date2"
   ,"date"
-  ,"status"
-  ,"code"
   ,"description"
-  ,"amount"
-  ,"account1"
-  ,"account2"
-  ,"comment"
+  ,"status"
   ]
 
 assignmentseparatorp :: CsvRulesParser ()
 assignmentseparatorp = do
-  lift $ pdbg 3 "trying assignmentseparatorp"
+  lift $ dbgparse 3 "trying assignmentseparatorp"
   choice [
-    -- try (lift (many spacenonewline) >> oneOf ":="),
-    try (lift (many spacenonewline) >> char ':'),
+    -- try (lift (skipMany spacenonewline) >> oneOf ":="),
+    try (lift (skipMany spacenonewline) >> char ':'),
     spaceChar
     ]
-  _ <- lift (many spacenonewline)
+  _ <- lift (skipMany spacenonewline)
   return ()
 
 fieldvalp :: CsvRulesParser String
 fieldvalp = do
-  lift $ pdbg 2 "trying fieldvalp"
-  anyChar `manyTill` lift eolof
+  lift $ dbgparse 2 "trying fieldvalp"
+  anySingle `manyTill` lift eolof
 
 conditionalblockp :: CsvRulesParser ConditionalBlock
 conditionalblockp = do
-  lift $ pdbg 3 "trying conditionalblockp"
-  string "if" >> lift (many spacenonewline) >> optional newline
+  lift $ dbgparse 3 "trying conditionalblockp"
+  string "if" >> lift (skipMany spacenonewline) >> optional newline
   ms <- some recordmatcherp
-  as <- many (lift (some spacenonewline) >> fieldassignmentp)
+  as <- many (lift (skipSome spacenonewline) >> fieldassignmentp)
   when (null as) $
     fail "start of conditional block found, but no assignment rules afterward\n(assignment rules in a conditional block should be indented)\n"
   return (ms, as)
@@ -535,9 +602,9 @@ conditionalblockp = do
 
 recordmatcherp :: CsvRulesParser [String]
 recordmatcherp = do
-  lift $ pdbg 2 "trying recordmatcherp"
+  lift $ dbgparse 2 "trying recordmatcherp"
   -- pos <- currentPos
-  _  <- optional (matchoperatorp >> lift (many spacenonewline) >> optional newline)
+  _  <- optional (matchoperatorp >> lift (skipMany spacenonewline) >> optional newline)
   ps <- patternsp
   when (null ps) $
     fail "start of record matcher found, but no patterns afterward\n(patterns should not be indented)\n"
@@ -545,7 +612,7 @@ recordmatcherp = do
   <?> "record matcher"
 
 matchoperatorp :: CsvRulesParser String
-matchoperatorp = choiceInState $ map string
+matchoperatorp = fmap T.unpack $ choiceInState $ map string
   ["~"
   -- ,"!~"
   -- ,"="
@@ -554,26 +621,26 @@ matchoperatorp = choiceInState $ map string
 
 patternsp :: CsvRulesParser [String]
 patternsp = do
-  lift $ pdbg 3 "trying patternsp"
+  lift $ dbgparse 3 "trying patternsp"
   ps <- many regexp
   return ps
 
 regexp :: CsvRulesParser String
 regexp = do
-  lift $ pdbg 3 "trying regexp"
+  lift $ dbgparse 3 "trying regexp"
   notFollowedBy matchoperatorp
   c <- lift nonspace
-  cs <- anyChar `manyTill` lift eolof
+  cs <- anySingle `manyTill` lift eolof
   return $ strip $ c:cs
 
 -- fieldmatcher = do
---   pdbg 2 "trying fieldmatcher"
+--   dbgparse 2 "trying fieldmatcher"
 --   f <- fromMaybe "all" `fmap` (optional $ do
 --          f' <- fieldname
---          lift (many spacenonewline)
+--          lift (skipMany spacenonewline)
 --          return f')
 --   char '~'
---   lift (many spacenonewline)
+--   lift (skipMany spacenonewline)
 --   ps <- patterns
 --   let r = "(" ++ intercalate "|" ps ++ ")"
 --   return (f,r)
@@ -616,7 +683,7 @@ transactionFromCsvRecord sourcepos rules record = t
       ]
     status      =
       case mfieldtemplate "status" of
-        Nothing  -> Uncleared
+        Nothing  -> Unmarked
         Just str -> either statuserror id .
                     runParser (statusp <* eof) "" .
                     T.pack $ render str
@@ -630,10 +697,10 @@ transactionFromCsvRecord sourcepos rules record = t
     comment     = maybe "" render $ mfieldtemplate "comment"
     precomment  = maybe "" render $ mfieldtemplate "precomment"
     currency    = maybe (fromMaybe "" mdefaultcurrency) render $ mfieldtemplate "currency"
-    amountstr   = (currency++) $ negateIfParenthesised $ getAmountStr rules record
-    amount      = either amounterror (Mixed . (:[])) $ runParser (evalStateT (amountp <* eof) mempty) "" $ T.pack amountstr
+    amountstr   = (currency++) <$> simplifySign <$> getAmountStr rules record
+    maybeamount      = either amounterror (Mixed . (:[])) <$> runParser (evalStateT (amountp <* eof) mempty) "" <$> T.pack <$> amountstr
     amounterror err = error' $ unlines
-      ["error: could not parse \""++amountstr++"\" as an amount"
+      ["error: could not parse \""++fromJust amountstr++"\" as an amount"
       ,showRecord record
       ,"the amount rule is:      "++(fromMaybe "" $ mfieldtemplate "amount")
       ,"the currency rule is:    "++(fromMaybe "unspecified" $ mfieldtemplate "currency")
@@ -643,10 +710,13 @@ transactionFromCsvRecord sourcepos rules record = t
        ++"change your amount or currency rules, "
        ++"or "++maybe "add a" (const "change your") mskip++" skip rule"
       ]
-    -- Using costOfMixedAmount here to allow complex costs like "10 GBP @@ 15 USD".
-    -- Aim is to have "10 GBP @@ 15 USD" applied to account2, but have "-15USD" applied to account1
-    amount1        = costOfMixedAmount amount
-    amount2        = (-amount)
+    amount1 = case maybeamount of
+                Just a -> a
+                Nothing | balance /= Nothing -> nullmixedamt
+                Nothing -> error' $ "amount and balance have no value\n"++showRecord record
+    -- convert balancing amount to cost like hledger print, so eg if
+    -- amount1 is "10 GBP @@ 15 USD", amount2 will be "-15 USD".
+    amount2        = costOfMixedAmount (-amount1)
     s `or` def  = if null s then def else s
     defaccount1 = fromMaybe "unknown" $ mdirective "default-account1"
     defaccount2 = case isNegativeMixedAmount amount2 of
@@ -654,6 +724,18 @@ transactionFromCsvRecord sourcepos rules record = t
                    _         -> "expenses:unknown"
     account1    = T.pack $ maybe "" render (mfieldtemplate "account1") `or` defaccount1
     account2    = T.pack $ maybe "" render (mfieldtemplate "account2") `or` defaccount2
+    balance     = maybe Nothing (parsebalance.render) $ mfieldtemplate "balance"
+    parsebalance str
+      | all isSpace str  = Nothing
+      | otherwise = Just $ (either (balanceerror str) id $ runParser (evalStateT (amountp <* eof) mempty) "" $ T.pack $ (currency++) $ simplifySign str, nullsourcepos)
+    balanceerror str err = error' $ unlines
+      ["error: could not parse \""++str++"\" as balance amount"
+      ,showRecord record
+      ,"the balance rule is:      "++(fromMaybe "" $ mfieldtemplate "balance")
+      ,"the currency rule is:    "++(fromMaybe "unspecified" $ mfieldtemplate "currency")
+      ,"the default-currency is: "++fromMaybe "unspecified" mdefaultcurrency
+      ,"the parse error is:      "++show err
+      ]
 
     -- build the transaction
     t = nulltransaction{
@@ -664,14 +746,18 @@ transactionFromCsvRecord sourcepos rules record = t
       tcode                    = T.pack code,
       tdescription             = T.pack description,
       tcomment                 = T.pack comment,
-      tpreceding_comment_lines = T.pack precomment,
+      tprecedingcomment = T.pack precomment,
       tpostings                =
-        [posting {paccount=account2, pamount=amount2, ptransaction=Just t}
-        ,posting {paccount=account1, pamount=amount1, ptransaction=Just t}
+        [posting {paccount=account1, pamount=amount1, ptransaction=Just t, pbalanceassertion=toAssertion <$> balance}
+        ,posting {paccount=account2, pamount=amount2, ptransaction=Just t}
         ]
       }
+    toAssertion (a, b) = assertion{
+      baamount   = a,
+      baposition = b
+      }
 
-getAmountStr :: CsvRules -> CsvRecord -> String
+getAmountStr :: CsvRules -> CsvRecord -> Maybe String
 getAmountStr rules record =
  let
    mamount    = getEffectiveAssignment rules record "amount"
@@ -680,17 +766,45 @@ getAmountStr rules record =
    render     = fmap (strip . renderTemplate rules record)
  in
   case (render mamount, render mamountin, render mamountout) of
-    (Just "", Nothing, Nothing) -> error' $ "amount has no value\n"++showRecord record
-    (Just a,  Nothing, Nothing) -> a
-    (Nothing, Just "", Just "") -> error' $ "neither amount-in or amount-out has a value\n"++showRecord record
-    (Nothing, Just i,  Just "") -> i
-    (Nothing, Just "", Just o)  -> negateStr o
-    (Nothing, Just _,  Just _)  -> error' $ "both amount-in and amount-out have a value\n"++showRecord record
-    _                           -> error' $ "found values for amount and for amount-in/amount-out - please use either amount or amount-in/amount-out\n"++showRecord record
+    (Just "", Nothing, Nothing) -> Nothing
+    (Just a,  Nothing, Nothing) -> Just a
+    (Nothing, Just "", Just "") -> error' $    "neither amount-in or amount-out has a value\n"
+                                            ++ "    record: " ++ showRecord record
+    (Nothing, Just i,  Just "") -> Just i
+    (Nothing, Just "", Just o)  -> Just $ negateStr o
+    (Nothing, Just i,  Just o)  -> error' $    "both amount-in and amount-out have a value\n"
+                                            ++ "    amount-in: "  ++ i ++ "\n"
+                                            ++ "    amount-out: " ++ o ++ "\n"
+                                            ++ "    record: "     ++ showRecord record
+    _                           -> error' $    "found values for amount and for amount-in/amount-out\n"
+                                            ++ "please use either amount or amount-in/amount-out\n"
+                                            ++ "    record: " ++ showRecord record
 
-negateIfParenthesised :: String -> String
-negateIfParenthesised ('(':s) | lastMay s == Just ')' = negateStr $ init s
-negateIfParenthesised s                               = s
+type CsvAmountString = String
+
+-- | Canonicalise the sign in a CSV amount string.
+-- Such strings can have a minus sign, negating parentheses,
+-- or any two of these (which cancels out).
+--
+-- >>> simplifySign "1"
+-- "1"
+-- >>> simplifySign "-1"
+-- "-1"
+-- >>> simplifySign "(1)"
+-- "-1"
+-- >>> simplifySign "--1"
+-- "1"
+-- >>> simplifySign "-(1)"
+-- "1"
+-- >>> simplifySign "(-1)"
+-- "1"
+-- >>> simplifySign "((1))"
+-- "1"
+simplifySign :: CsvAmountString -> CsvAmountString
+simplifySign ('(':s) | lastMay s == Just ')' = simplifySign $ negateStr $ init s
+simplifySign ('-':'(':s) | lastMay s == Just ')' = simplifySign $ init s
+simplifySign ('-':'-':s) = s
+simplifySign s = s
 
 negateStr :: String -> String
 negateStr ('-':s) = s
@@ -729,10 +843,10 @@ getEffectiveAssignment rules record f = lastMay $ assignmentsFor f
 renderTemplate ::  CsvRules -> CsvRecord -> FieldTemplate -> String
 renderTemplate rules record t = regexReplaceBy "%[A-z0-9]+" replace t
   where
-    replace ('%':pat) = maybe pat (\i -> atDef "" record (i-1)) mi
+    replace ('%':pat) = maybe pat (\i -> atDef "" record (i-1)) mindex
       where
-        mi | all isDigit pat = readMay pat
-           | otherwise       = lookup pat $ rcsvfieldindexes rules
+        mindex | all isDigit pat = readMay pat
+               | otherwise       = lookup (map toLower pat) $ rcsvfieldindexes rules
     replace pat       = pat
 
 -- Parse the date string using the specified date-format, or if unspecified try these default formats:
@@ -763,67 +877,24 @@ parseDateWithFormatOrDefaultFormats mformat s = firstJust $ map parsewith format
 --------------------------------------------------------------------------------
 -- tests
 
-tests_Hledger_Read_CsvReader = TestList (test_parser)
-                               -- ++ test_description_parsing)
+tests_CsvReader = tests "CsvReader" [
+   tests "parseCsvRules" [
+     test "empty file" $
+      parseCsvRules "unknown" "" `is` Right rules
+    ]
+  ,tests "rulesp" [
+     test "trailing comments" $
+      parseWithState' rules rulesp "skip\n# \n#\n" `is` Right rules{rdirectives = [("skip","")]}
 
--- test_description_parsing = [
---       "description-field 1" ~: assertParseDescription "description-field 1\n" [FormatField False Nothing Nothing (FieldNo 1)]
---     , "description-field 1 " ~: assertParseDescription "description-field 1 \n" [FormatField False Nothing Nothing (FieldNo 1)]
---     , "description-field %(1)" ~: assertParseDescription "description-field %(1)\n" [FormatField False Nothing Nothing (FieldNo 1)]
---     , "description-field %(1)/$(2)" ~: assertParseDescription "description-field %(1)/%(2)\n" [
---           FormatField False Nothing Nothing (FieldNo 1)
---         , FormatLiteral "/"
---         , FormatField False Nothing Nothing (FieldNo 2)
---         ]
---     ]
---   where
---     assertParseDescription string expected = do assertParseEqual (parseDescription string) (rules {descriptionField = expected})
---     parseDescription :: String -> Either ParseError CsvRules
---     parseDescription x = runParser descriptionfieldWrapper rules "(unknown)" x
---     descriptionfieldWrapper :: GenParser Char CsvRules CsvRules
---     descriptionfieldWrapper = do
---       descriptionfield
---       r <- getState
---       return r
+    ,test "trailing blank lines" $
+      parseWithState' rules rulesp "skip\n\n  \n" `is` (Right rules{rdirectives = [("skip","")]})
 
-test_parser =  [
+    ,test "no final newline" $
+      parseWithState' rules rulesp "skip" `is` (Right rules{rdirectives=[("skip","")]})
 
-   "convert rules parsing: empty file" ~: do
-     -- let assertMixedAmountParse parseresult mixedamount =
-     --         (either (const "parse error") showMixedAmountDebug parseresult) ~?= (showMixedAmountDebug mixedamount)
-    assertParseEqual (parseCsvRules "unknown" "") rules
+    ,test "assignment with empty value" $
+      parseWithState' rules rulesp "account1 \nif foo\n  account2 foo\n" `is`
+        (Right rules{rassignments = [("account1","")], rconditionalblocks = [([["foo"]],[("account2","foo")])]})
 
-  -- ,"convert rules parsing: accountrule" ~: do
-  --    assertParseEqual (parseWithState rules accountrule "A\na\n") -- leading blank line required
-  --                ([("A",Nothing)], "a")
-
-  ,"convert rules parsing: trailing comments" ~: do
-     assertParse (parseWithState' rules rulesp "skip\n# \n#\n")
-
-  ,"convert rules parsing: trailing blank lines" ~: do
-     assertParse (parseWithState' rules rulesp "skip\n\n  \n")
-
-  ,"convert rules parsing: empty field value" ~: do
-     assertParse (parseWithState' rules rulesp "account1 \nif foo\n  account2 foo\n")
-
-  -- not supported
-  -- ,"convert rules parsing: no final newline" ~: do
-  --    assertParse (parseWithState rules csvrulesfile "A\na")
-  --    assertParse (parseWithState rules csvrulesfile "A\na\n# \n#")
-  --    assertParse (parseWithState rules csvrulesfile "A\na\n\n  ")
-
-                 -- (rules{
-                 --   -- dateField=Maybe FieldPosition,
-                 --   -- statusField=Maybe FieldPosition,
-                 --   -- codeField=Maybe FieldPosition,
-                 --   -- descriptionField=Maybe FieldPosition,
-                 --   -- amountField=Maybe FieldPosition,
-                 --   -- currencyField=Maybe FieldPosition,
-                 --   -- baseCurrency=Maybe String,
-                 --   -- baseAccount=AccountName,
-                 --   accountRules=[
-                 --        ([("A",Nothing)], "a")
-                 --       ]
-                 --  })
-
+    ]
   ]

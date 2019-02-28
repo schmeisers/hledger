@@ -1,84 +1,117 @@
-Attention, attention hledger-folk! Once again, Happy Hallowe'en.
+I'm pleased to announce the release of hledger 1.13,
+the first hledger release of 2019!
+Thank you release contributors Jakob Schöttl and Dmitry Astapov.
 
-After almost ten years of steady development, and one year since
-our last major release, I am very pleased to announce..
+hledger is a robust, cross-platform plain text accounting tool, for
+tracking money, time, stocks, cryptocurrencies or any other commodity,
+using double-entry accounting, private or shared plain text files,
+revision control, and command-line, curses or web UIs.
+Find out more at http://hledger.org and http://plaintextaccounting.org.
 
-  _     _          _                   _   ___    _ 
- | |__ | | ___  __| | __ _  ___ _ __  / | / _ \  | |
- | '_ \| |/ _ \/ _` |/ _` |/ _ \ '__| | || | | | | |
- | | | | |  __/ (_| | (_| |  __/ |    | || |_| | |_|
- |_| |_|_|\___|\__,_|\__, |\___|_|    |_(_)___/  (_)
-                     |___/                          
 
-hledger's 1.0 release! It's about time!
+Release notes (condensed, see http://hledger.org/release-notes):
+-------------
 
-hledger (http://hledger.org) is a cross-platform program for tracking
-money, time, or any other commodity using double-entry accounting
-and a simple plain text file format.
-Inspired by Ledger CLI, hledger provides command-line, curses
-and web interfaces, and aims to be a reliable, practical tool
-for daily use.
+project-wide changes for 1.13
 
-Notable changes since 0.27:
+-   packaging: A docker image providing the main hledger tools is now
+    linked on the download page. This is another way to get up-to-date
+    hledger tools without building them yourself (and, a way to run
+    hledger-ui on windows ?) (Dmitry Astapov, Simon Michael)
 
-- the hledger.org website is simpler, clearer, and more mobile-friendly
+-   doc: fixed pandoc typography conversion in web manuals. Eg -- was
+    being rendered as en-dash. (#954).
 
-- docs have been reorganized, with more focussed manuals available in
-  multiple versions, formats and as built-in help
+hledger 1.13
 
-- we support the latest GHC (8 and 7.10), stackage snapshots, and
-  libs.  (GHC 7.8 and 7.6 support are not currently supported,
-  maintainers welcome.)
+-   cli: reorganised commands list. Addons now have a + prefix.
 
-- hledger has migrated from parsec to megaparsec and from String to
-  Text, parsers have been simplified, memory usage is ~30% less on
-  large files, speed is slightly improved all around
+-   cli: the command line help and manual section for all hledger's
+    commands are now consistent, and generated from the same source.
 
-- --pivot (group by arbitrary tag instead of account) and --anon
-  (obfuscate account names) are now supported
+-   cli: comprehensive bash completion support is now provided (in
+    shell-completion/). See how-to in the Cookbook. (Jakob Schöttl)
 
-- hledger-ui has acquired many new features making it more useful
-  (file editing, filtering, historical/period modes, quick period
-  browsing..)
+-   balance --budget: budget amounts now aggregate hierarchically, like
+    account balances. Unbudgeted accounts can be shown with -E/--empty
+    (along with zero-balance accounts), and the --show-budgeted flag has
+    been dropped. (Dmitry Astapov)
 
-- hledger-web is more robust and more mobile-friendly
+-   balance: new --transpose flag switches the rows and columns of
+    tabular balance reports (in txt and csv output formats). (Dmitry
+    Astapov)
 
-- hledger-api, a simple web API server, has been added
+-   close: generated balance assertions now have exact amounts with all
+    decimal digits, ignoring display precision. Also, balance assertion
+    amounts will no longer contain prices. (#941, #824, #958)
 
-- a new "timedot" file format allows retroactive/approximate time
-  logging
+-   files: now shows up in the commands list
 
-- the project continues to grow. A call for help was sent out last
-  month, and contributor activity is increasing
+-   import: be silent when there's nothing to import
 
-- a new website, http://plaintextaccounting.org, has been created as a
-  portal and knowledge base for hledger, Ledger, beancount and related
-  tools and practices.
+-   roi: percentages smaller than 0.01% are displayed as zero (Dmitry
+    Astapov)
 
-Full release notes: http://hledger.org/release-notes#hledger-1.0
+-   stats, ui: correct file order is preserved when using --auto (#949)
 
-How to install:
+-   journal: account directive: the account name can now be followed by
+    a comment on the same line
 
-(Get stack, eg from http://haskell-lang.org/get-started)
-$ stack install --resolver=nightly hledger [hledger-ui] [hledger-web] [hledger-api]
-$ ~/.local/bin/hledger --version
+-   journal: account directive: account types for the bs/bse/cf/is
+    commands can now be set with a type: tag, whose value is Asset,
+    Liability, Equity, Revenue, Expense, A, L, E, R or X
+    (case-insensitive). The previous syntax (account assets A) is now
+    deprecated.
 
-or see http://hledger.org/download for more install options,
-including cabal, OS packages and Windows binaries.
+-   journal: account directive: account sort codes like account 1000
+    (introduced in 1.9, deprecated in 1.11) are no longer supported.
 
-Contributors to this release:
+-   journal: transaction modifiers (auto postings) can affect periodic
+    transactions (--auto can add postings to transactions generated with
+    --forecast). (Dmitry Astapov)
 
-Simon Michael, Dominik Süß, Thomas R. Koll, Moritz Kiefer,
-jungle-boogie, Sergei Trofimovich, Malte Brandy, Sam Doshi,
-Mitchell Rosen, Hans-Peter Deifel, Brian Scott, and Andrew Jones.
+-   journal: balance assertion errors now show exact amounts with all
+    decimal digits. Previously it was possible, in case of a commodity
+    directive limiting the display precision, to have a balance
+    assertion error with asserted and actual amounts looking the same.
+    (#941)
 
-How to get and give help:
+-   journal: fixed a periodic transaction parsing failure (#942) (Dmitry
+    Astapov)
 
-I hope you enjoy these tools and that they help you achieve your goals.
-The hledger project is too large for one person to do it justice, 
-so it's great to see our developer community growing.  If you like
-hledger, your support and participation is welcome! Our IRC channel is 
-#hledger on Freenode, and you can find out more at http://hledger.org.
+hledger-ui 1.13
+
+-   on posix systems, control-z suspends the program
+
+-   control-l now works everywhere and redraws more reliably
+
+-   the top status info is clearer
+
+
+Getting started:
+----------------
+
+All install methods are described at http://hledger.org/download :
+windows binaries, system packages, docker, nix, cabal, stack, hledger
+installer, etc. Some of these might take a few days to become up to
+date. On systems with bash installed, the hledger installer is a
+reliable way to get the latest release of hledger:
+
+$ curl -s https://raw.githubusercontent.com/simonmichael/hledger/master/hledger-install/hledger-install.sh > hledger-install.sh
+$ less hledger-install.sh  # satisfy yourself that the script is safe
+$ bash hledger-install.sh
+
+Then try:
+
+$ hledger               # list available commands
+$ hledger help          # list built-in manuals
+
+Tutorials and all other docs: http://hledger.org
+
+Chat: #hledger on Freenode or Matrix - 
+http://irc.hledger.org or http://riot.hledger.org .
+
+New and old users, contributors, all feedback, always welcome!
 
 Best,
 -Simon

@@ -2,6 +2,7 @@
 
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE CPP #-}
 
 module Hledger.UI.AccountsScreen
  (accountsScreen
@@ -12,23 +13,26 @@ where
 
 import Brick
 import Brick.Widgets.List
+  (handleListEvent, list, listElementsL, listMoveDown, listMoveTo, listNameL, listSelectedElement, listSelectedL, renderList)
 import Brick.Widgets.Edit
-import Brick.Widgets.Border (borderAttr)
 import Control.Monad
 import Control.Monad.IO.Class (liftIO)
 import Data.List
 import Data.Maybe
-import Data.Monoid
+#if !(MIN_VERSION_base(4,11,0))
+import Data.Monoid ((<>))
+#endif
 import qualified Data.Text as T
-import Data.Time.Calendar (Day)
+import Data.Time.Calendar (Day, addDays)
 import qualified Data.Vector as V
 import Graphics.Vty (Event(..),Key(..),Modifier(..))
 import Lens.Micro.Platform
+import Safe
 import System.Console.ANSI
 import System.FilePath (takeFileName)
 
 import Hledger
-import Hledger.Cli hiding (progname,prognameandversion,green)
+import Hledger.Cli hiding (progname,prognameandversion)
 import Hledger.UI.UIOptions
 import Hledger.UI.UITypes
 import Hledger.UI.UIState
@@ -36,6 +40,7 @@ import Hledger.UI.UIUtils
 import Hledger.UI.Editor
 import Hledger.UI.RegisterScreen
 import Hledger.UI.ErrorScreen
+
 
 accountsScreen :: Screen
 accountsScreen = AccountsScreen{
@@ -54,62 +59,77 @@ asInit d reset ui@UIState{
   } =
   ui{aopts=uopts', aScreen=s & asList .~ newitems'}
    where
-    newitems = list AccountsList (V.fromList displayitems) 1
+    newitems = list AccountsList (V.fromList $ displayitems ++ blankitems) 1
 
-    -- keep the selection near the last selected account
-    -- (may need to move to the next leaf account when entering flat mode)
+    -- decide which account is selected:
+    -- if reset is true, the first account;
+    -- otherwise, the previously selected account if possible;
+    -- otherwise, the first account with the same prefix (eg first leaf account when entering flat mode);
+    -- otherwise, the alphabetically preceding account.
     newitems' = listMoveTo selidx newitems
       where
         selidx = case (reset, listSelectedElement $ _asList s) of
                    (True, _)               -> 0
                    (_, Nothing)            -> 0
-                   (_, Just (_,AccountsScreenItem{asItemAccountName=a})) -> fromMaybe (fromMaybe 0 mprefixmatch) mexactmatch
-                     where
-                       mexactmatch  = findIndex ((a ==)                      . asItemAccountName) displayitems
-                       mprefixmatch = findIndex ((a `isAccountNamePrefixOf`) . asItemAccountName) displayitems
+                   (_, Just (_,AccountsScreenItem{asItemAccountName=a})) -> 
+                     headDef 0 $ catMaybes [
+                       findIndex (a ==) as
+                      ,findIndex (a `isAccountNamePrefixOf`) as
+                      ,Just $ max 0 (length (filter (< a) as) - 1)
+                      ]
+                      where
+                        as = map asItemAccountName displayitems
+
     uopts' = uopts{cliopts_=copts{reportopts_=ropts'}}
-    ropts' = ropts{accountlistmode_=if flat_ ropts then ALFlat else ALTree}
+    ropts' = ropts{accountlistmode_=if tree_ ropts then ALTree else ALFlat}
 
-    q = queryFromOpts d ropts
-
-    -- maybe convert balances to market value
-    convert | value_ ropts' = balanceReportValue j valuedate
-            | otherwise    = id
-      where
-        valuedate = fromMaybe d $ queryEndDate False q
+    -- Add a date:-tomorrow to the query to exclude future txns, by default.
+    -- XXX this necessitates special handling in multiBalanceReport, at least
+    pfq | presentorfuture_ uopts == PFFuture = Any
+        | otherwise                          = Date $ DateSpan Nothing (Just $ addDays 1 d)
+    q = And [queryFromOpts d ropts, pfq]
+        
 
     -- run the report
-    (items,_total) = convert $ report ropts' q j
+    (items,_total) = report ropts' q j
       where
-        -- still using the old balanceReport for change reports as it
-        -- does not include every account from before the report period
-        report | balancetype_ ropts == HistoricalBalance = singleBalanceReport
+                 -- XXX in historical mode, --forecast throws off the starting balances
+        report | balancetype_ ropts == HistoricalBalance = balanceReportFromMultiBalanceReport
                | otherwise                               = balanceReport
+                    -- still using the old balanceReport for change reports as it
+                    -- does not include every account from before the report period
 
 
     -- pre-render the list items
     displayitem (fullacct, shortacct, indent, bal) =
       AccountsScreenItem{asItemIndentLevel        = indent
                         ,asItemAccountName        = fullacct
-                        ,asItemDisplayAccountName = replaceHiddenAccountsNameWith "All" $ if flat_ ropts' then fullacct else shortacct
+                        ,asItemDisplayAccountName = replaceHiddenAccountsNameWith "All" $ if tree_ ropts' then shortacct else fullacct 
                         ,asItemRenderedAmounts    = map showAmountWithoutPrice amts -- like showMixedAmountOneLineWithoutPrice
                         }
       where
         Mixed amts = normaliseMixedAmountSquashPricesForDisplay $ stripPrices bal
         stripPrices (Mixed as) = Mixed $ map stripprice as where stripprice a = a{aprice=NoPrice}
     displayitems = map displayitem items
+    -- blanks added for scrolling control, cf RegisterScreen 
+    blankitems = replicate 100
+      AccountsScreenItem{asItemIndentLevel        = 0
+                        ,asItemAccountName        = ""
+                        ,asItemDisplayAccountName = ""
+                        ,asItemRenderedAmounts    = []
+                        }
 
 
 asInit _ _ _ = error "init function called with wrong screen type, should not happen"
 
 asDraw :: UIState -> [Widget Name]
-asDraw UIState{aopts=UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}}
-                           ,ajournal=j
-                           ,aScreen=s@AccountsScreen{}
-                           ,aMode=mode
-                           } =
+asDraw UIState{aopts=uopts@UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}}
+              ,ajournal=j
+              ,aScreen=s@AccountsScreen{}
+              ,aMode=mode
+              } =
   case mode of
-    Help       -> [helpDialog, maincontent]
+    Help       -> [helpDialog copts, maincontent]
     -- Minibuffer e -> [minibuffer e, maincontent]
     _          -> [maincontent]
   where
@@ -154,62 +174,48 @@ asDraw UIState{aopts=UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}}
         ishistorical = balancetype_ ropts == HistoricalBalance
 
         toplabel =
-              files
-          -- <+> withAttr (borderAttr <> "query") (str (if flat_ ropts then " flat" else ""))
-          <+> nonzero
-          <+> str (if ishistorical then " accounts" else " account changes")
-          -- <+> str (if ishistorical then " balances" else " changes")
+              withAttr ("border" <> "filename") files
+          <+> toggles
+          <+> str (" account " ++ if ishistorical then "balances" else "changes")
           <+> borderPeriodStr (if ishistorical then "at end of" else "in") (period_ ropts)
           <+> borderQueryStr querystr
-          <+> togglefilters
           <+> borderDepthStr mdepth
-          <+> str " ("
-          <+> cur
-          <+> str "/"
-          <+> total
-          <+> str ")"
-          <+> (if ignore_assertions_ copts
-               then withAttr (borderAttr <> "query") (str " ignoring balance assertions")
+          <+> str (" ("++curidx++"/"++totidx++")")
+          <+> (if ignore_assertions_ $ inputopts_ copts
+               then withAttr ("border" <> "query") (str " ignoring balance assertions")
                else str "")
           where
             files = case journalFilePaths j of
                            [] -> str ""
-                           f:_ -> withAttr ("border" <> "bold") $ str $ takeFileName f
+                           f:_ -> str $ takeFileName f
                            -- [f,_:[]] -> (withAttr ("border" <> "bold") $ str $ takeFileName f) <+> str " (& 1 included file)"
                            -- f:fs  -> (withAttr ("border" <> "bold") $ str $ takeFileName f) <+> str (" (& " ++ show (length fs) ++ " included files)")
+            toggles = withAttr ("border" <> "query") $ str $ unwords $ concat [
+               [""]
+              ,if empty_ ropts then [] else ["nonzero"]
+              ,uiShowStatus copts $ statuses_ ropts
+              ,if real_ ropts then ["real"] else []
+              ]
             querystr = query_ ropts
             mdepth = depth_ ropts
-            togglefilters =
-              case concat [
-                   uiShowClearedStatus $ clearedstatus_ ropts
-                  ,if real_ ropts then ["real"] else []
-                  ] of
-                [] -> str ""
-                fs -> str " from " <+> withAttr (borderAttr <> "query") (str $ intercalate ", " fs) <+> str " txns"
-            nonzero | empty_ ropts = str ""
-                    | otherwise    = withAttr (borderAttr <> "query") (str " nonzero")
-            cur = str (case _asList s ^. listSelectedL of
-                        Nothing -> "-"
-                        Just i -> show (i + 1))
-            total = str $ show $ V.length $ s ^. asList . listElementsL
+            curidx = case _asList s ^. listSelectedL of
+                       Nothing -> "-"
+                       Just i -> show (i + 1)
+            totidx = show $ V.length nonblanks 
+              where
+                nonblanks = V.takeWhile (not . T.null . asItemAccountName) $ s ^. asList . listElementsL
 
         bottomlabel = case mode of
                         Minibuffer ed -> minibuffer ed
                         _             -> quickhelp
           where
-            selectedstr = withAttr (borderAttr <> "query") . str
             quickhelp = borderKeysStr' [
                ("?", str "help")
-              ,("right", str "register")
-              ,("H"
-               ,if ishistorical
-                then selectedstr "historical" <+> str "/period"
-                else str "historical/" <+> selectedstr "period")
-              ,("F"
-               ,if flat_ ropts
-                then str "tree/" <+> selectedstr "flat"
-                else selectedstr "tree" <+> str "/flat")
+--              ,("RIGHT", str "register")
               ,("-+", str "depth")
+              ,("T", renderToggle (tree_ ropts) "flat" "tree")
+              ,("H", renderToggle (not ishistorical) "end-bals" "changes")
+              ,("F", renderToggle (presentorfuture_ uopts == PFFuture) "present" "future") 
               --,("/", "filter")
               --,("DEL", "unfilter")
               --,("ESC", "cancel/top")
@@ -255,9 +261,9 @@ asHandle ui0@UIState{
   ,aMode=mode
   } ev = do
   d <- liftIO getCurrentDay
-  -- c <- getContext
-  -- let h = c^.availHeightL
-  --     moveSel n l = listMoveBy n l
+  let
+    nonblanks = V.takeWhile (not . T.null . asItemAccountName) $ _asList^.listElementsL
+    lastnonblankidx = max 0 (length nonblanks - 1)
 
   -- save the currently selected account, in case we leave this screen and lose the selection
   let
@@ -272,6 +278,8 @@ asHandle ui0@UIState{
         VtyEvent (EvKey KEsc   []) -> continue $ closeMinibuffer ui
         VtyEvent (EvKey KEnter []) -> continue $ regenerateScreens j d $ setFilter s $ closeMinibuffer ui
                             where s = chomp $ unlines $ map strip $ getEditContents ed
+        VtyEvent (EvKey (KChar 'l') [MCtrl]) -> redraw ui
+        VtyEvent (EvKey (KChar 'z') [MCtrl]) -> suspend ui
         VtyEvent ev        -> do ed' <- handleEditorEvent ev ed
                                  continue $ ui{aMode=Minibuffer ed'}
         AppEvent _        -> continue ui
@@ -281,6 +289,8 @@ asHandle ui0@UIState{
     Help ->
       case ev of
         VtyEvent (EvKey (KChar 'q') []) -> halt ui
+        VtyEvent (EvKey (KChar 'l') [MCtrl]) -> redraw ui
+        VtyEvent (EvKey (KChar 'z') [MCtrl]) -> suspend ui
         _                    -> helpHandle ui ev
 
     Normal ->
@@ -315,50 +325,72 @@ asHandle ui0@UIState{
         VtyEvent (EvKey (KChar '_') []) -> continue $ regenerateScreens j d $ decDepth ui
         VtyEvent (EvKey (KChar c)   []) | c `elem` ['+','='] -> continue $ regenerateScreens j d $ incDepth ui
         VtyEvent (EvKey (KChar 't') [])    -> continue $ regenerateScreens j d $ setReportPeriod (DayPeriod d) ui
-        VtyEvent (EvKey (KChar 'H') []) -> continue $ regenerateScreens j d $ toggleHistorical ui
-        VtyEvent (EvKey (KChar 'F') []) -> continue $ regenerateScreens j d $ toggleFlat ui
-        VtyEvent (EvKey (KChar 'Z') []) -> scrollTop >> (continue $ regenerateScreens j d $ toggleEmpty ui)
-        VtyEvent (EvKey (KChar 'C') []) -> scrollTop >> (continue $ regenerateScreens j d $ toggleCleared ui)
-        VtyEvent (EvKey (KChar 'U') []) -> scrollTop >> (continue $ regenerateScreens j d $ toggleUncleared ui)
-        VtyEvent (EvKey (KChar 'R') []) -> scrollTop >> (continue $ regenerateScreens j d $ toggleReal ui)
+
+        -- display mode/query toggles
+        VtyEvent (EvKey (KChar 'H') []) -> asCenterAndContinue $ regenerateScreens j d $ toggleHistorical ui
+        VtyEvent (EvKey (KChar 'T') []) -> asCenterAndContinue $ regenerateScreens j d $ toggleTree ui
+        VtyEvent (EvKey (KChar 'Z') []) -> asCenterAndContinue $ regenerateScreens j d $ toggleEmpty ui
+        VtyEvent (EvKey (KChar 'R') []) -> asCenterAndContinue $ regenerateScreens j d $ toggleReal ui
+        VtyEvent (EvKey (KChar 'U') []) -> asCenterAndContinue $ regenerateScreens j d $ toggleUnmarked ui
+        VtyEvent (EvKey (KChar 'P') []) -> asCenterAndContinue $ regenerateScreens j d $ togglePending ui
+        VtyEvent (EvKey (KChar 'C') []) -> asCenterAndContinue $ regenerateScreens j d $ toggleCleared ui
+        VtyEvent (EvKey (KChar 'F') []) -> asCenterAndContinue $ regenerateScreens j d $ toggleFuture ui
+
         VtyEvent (EvKey (KDown)     [MShift]) -> continue $ regenerateScreens j d $ shrinkReportPeriod d ui
         VtyEvent (EvKey (KUp)       [MShift]) -> continue $ regenerateScreens j d $ growReportPeriod d ui
         VtyEvent (EvKey (KRight)    [MShift]) -> continue $ regenerateScreens j d $ nextReportPeriod journalspan ui
         VtyEvent (EvKey (KLeft)     [MShift]) -> continue $ regenerateScreens j d $ previousReportPeriod journalspan ui
         VtyEvent (EvKey (KChar '/') []) -> continue $ regenerateScreens j d $ showMinibuffer ui
         VtyEvent (EvKey k           []) | k `elem` [KBS, KDel] -> (continue $ regenerateScreens j d $ resetFilter ui)
-        VtyEvent (EvKey k           []) | k `elem` [KLeft, KChar 'h']  -> continue $ popScreen ui
-        VtyEvent (EvKey k           []) | k `elem` [KRight, KChar 'l'] -> scrollTopRegister >> continue (screenEnter d scr ui)
+        VtyEvent e | e `elem` moveLeftEvents -> continue $ popScreen ui
+        VtyEvent (EvKey (KChar 'l') [MCtrl]) -> scrollSelectionToMiddle _asList >> redraw ui
+        VtyEvent (EvKey (KChar 'z') [MCtrl]) -> suspend ui
+
+        -- enter register screen for selected account (if there is one), 
+        -- centering its selected transaction if possible
+        VtyEvent e | e `elem` moveRightEvents 
+                   , not $ isBlankElement $ listSelectedElement _asList->
+          -- TODO center selection after entering register screen; neither of these works till second time entering; easy strictifications didn't help 
+          rsCenterAndContinue $  
+          -- flip rsHandle (VtyEvent (EvKey (KChar 'l') [MCtrl])) $
+            screenEnter d regscr ui 
           where
-            scr = rsSetAccount selacct isdepthclipped registerScreen
+            regscr = rsSetAccount selacct isdepthclipped registerScreen
             isdepthclipped = case getDepth ui of
                                 Just d  -> accountNameLevel selacct >= d
                                 Nothing -> False
 
+        -- prevent moving down over blank padding items;
+        -- instead scroll down by one, until maximally scrolled - shows the end has been reached
+        VtyEvent (EvKey (KDown)     []) | isBlankElement mnextelement -> do
+          vScrollBy (viewportScroll $ _asList^.listNameL) 1 
+          continue ui
+          where 
+            mnextelement = listSelectedElement $ listMoveDown _asList
+
+        -- if page down or end leads to a blank padding item, stop at last non-blank
+        VtyEvent e@(EvKey k           []) | k `elem` [KPageDown, KEnd] -> do
+          list <- handleListEvent e _asList
+          if isBlankElement $ listSelectedElement list
+          then do
+            let list' = listMoveTo lastnonblankidx list
+            scrollSelectionToMiddle list'
+            continue ui{aScreen=scr{_asList=list'}}
+          else
+            continue ui{aScreen=scr{_asList=list}}
+          
         -- fall through to the list's event handler (handles up/down)
-        VtyEvent ev ->
-              do
-                let ev' = case ev of
-                            EvKey (KChar 'k') [] -> EvKey (KUp) []
-                            EvKey (KChar 'j') [] -> EvKey (KDown) []
-                            _                    -> ev
-                newitems <- handleListEvent ev' _asList
-                continue $ ui{aScreen=scr & asList .~ newitems
-                                          & asSelectedAccount .~ selacct
-                                          }
-                -- continue =<< handleEventLensed ui someLens ev
+        VtyEvent ev -> do
+          newitems <- handleListEvent (normaliseMovementKeys ev) _asList
+          continue $ ui{aScreen=scr & asList .~ newitems
+                                    & asSelectedAccount .~ selacct
+                                    }
+
         AppEvent _        -> continue ui
         MouseDown _ _ _ _ -> continue ui
         MouseUp _ _ _     -> continue ui
 
   where
-    -- Encourage a more stable scroll position when toggling list items.
-    -- We scroll to the top, and the viewport will automatically
-    -- scroll down just far enough to reveal the selection, which
-    -- usually leaves it at bottom of screen).
-    -- XXX better: scroll so selection is in middle of screen ?
-    scrollTop         = vScrollToBeginning $ viewportScroll AccountsViewport
-    scrollTopRegister = vScrollToBeginning $ viewportScroll RegisterViewport
     journalspan = journalDateSpan False j
 
 asHandle _ _ = error "event handler called with wrong screen type, should not happen"
@@ -366,3 +398,8 @@ asHandle _ _ = error "event handler called with wrong screen type, should not ha
 asSetSelectedAccount a s@AccountsScreen{} = s & asSelectedAccount .~ a
 asSetSelectedAccount _ s = s
 
+isBlankElement mel = ((asItemAccountName . snd) <$> mel) == Just "" 
+
+asCenterAndContinue ui = do
+  scrollSelectionToMiddle $ _asList $ aScreen ui
+  continue ui

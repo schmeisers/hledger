@@ -4,6 +4,7 @@ Standard imports and utilities which are useful everywhere, or needed low
 in the module hierarchy. This is the bottom of hledger's module graph.
 
 -}
+{-# LANGUAGE OverloadedStrings, LambdaCase #-}
 
 module Hledger.Utils (---- provide these frequently used modules - or not, for clearer api:
                           -- module Control.Monad,
@@ -14,7 +15,6 @@ module Hledger.Utils (---- provide these frequently used modules - or not, for c
                           -- module Data.Time.LocalTime,
                           -- module Data.Tree,
                           -- module Text.RegexPR,
-                          -- module Test.HUnit,
                           -- module Text.Printf,
                           ---- all of this one:
                           module Hledger.Utils,
@@ -24,25 +24,32 @@ module Hledger.Utils (---- provide these frequently used modules - or not, for c
                           module Hledger.Utils.String,
                           module Hledger.Utils.Text,
                           module Hledger.Utils.Test,
+                          module Hledger.Utils.Color,
                           module Hledger.Utils.Tree,
                           -- Debug.Trace.trace,
                           -- module Data.PPrint,
                           -- module Hledger.Utils.UTF8IOCompat
-                          SystemString,fromSystemString,toSystemString,error',userError',
+                          SystemString,fromSystemString,toSystemString,error',userError',usageError,
                           -- the rest need to be done in each module I think
                           )
 where
-import Control.Monad (liftM)
+
+import Control.Monad (liftM, when)
 -- import Data.Char
--- import Data.List
+import Data.Default
+import Data.FileEmbed (makeRelativeToProject, embedStringFile)
+import Data.List
 -- import Data.Maybe
 -- import Data.PPrint
+-- import Data.String.Here (hereFile)
 import Data.Text (Text)
 import qualified Data.Text.IO as T
 import Data.Time.Clock
 import Data.Time.LocalTime
 -- import Data.Text (Text)
 -- import qualified Data.Text as T
+-- import Language.Haskell.TH.Quote (QuasiQuoter(..))
+import Language.Haskell.TH.Syntax (Q, Exp)
 import System.Directory (getHomeDirectory)
 import System.FilePath((</>), isRelative)
 import System.IO
@@ -55,10 +62,11 @@ import Hledger.Utils.Regex
 import Hledger.Utils.String
 import Hledger.Utils.Text
 import Hledger.Utils.Test
+import Hledger.Utils.Color
 import Hledger.Utils.Tree
 -- import Prelude hiding (readFile,writeFile,appendFile,getContents,putStr,putStrLn)
 -- import Hledger.Utils.UTF8IOCompat   (readFile,writeFile,appendFile,getContents,putStr,putStrLn)
-import Hledger.Utils.UTF8IOCompat (SystemString,fromSystemString,toSystemString,error',userError')
+import Hledger.Utils.UTF8IOCompat (SystemString,fromSystemString,toSystemString,error',userError',usageError)
 
 
 -- tuples
@@ -115,6 +123,8 @@ getCurrentZonedTime = do
 
 -- misc
 
+instance Default Bool where def = False
+
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True
 isLeft _        = False
@@ -122,52 +132,111 @@ isLeft _        = False
 isRight :: Either a b -> Bool
 isRight = not . isLeft
 
--- | Apply a function the specified number of times. Possibly uses O(n) stack ?
+-- | Apply a function the specified number of times,
+-- which should be > 0 (otherwise does nothing).
+-- Possibly uses O(n) stack ?
 applyN :: Int -> (a -> a) -> a -> a
-applyN n f = (!! n) . iterate f
+applyN n f | n < 1     = id
+           | otherwise = (!! n) . iterate f
+-- from protolude, compare
+-- applyN :: Int -> (a -> a) -> a -> a
+-- applyN n f = X.foldr (.) identity (X.replicate n f)
 
 -- | Convert a possibly relative, possibly tilde-containing file path to an absolute one,
 -- given the current directory. ~username is not supported. Leave "-" unchanged.
 -- Can raise an error.
 expandPath :: FilePath -> FilePath -> IO FilePath -- general type sig for use in reader parsers
 expandPath _ "-" = return "-"
-expandPath curdir p = (if isRelative p then (curdir </>) else id) `liftM` expandPath' p
-  where
-    expandPath' ('~':'/':p)  = (</> p) <$> getHomeDirectory
-    expandPath' ('~':'\\':p) = (</> p) <$> getHomeDirectory
-    expandPath' ('~':_)      = ioError $ userError "~USERNAME in paths is not supported"
-    expandPath' p            = return p
+expandPath curdir p = (if isRelative p then (curdir </>) else id) `liftM` expandHomePath p
+
+-- | Expand user home path indicated by tilde prefix
+expandHomePath :: FilePath -> IO FilePath
+expandHomePath = \case
+    ('~':'/':p)  -> (</> p) <$> getHomeDirectory
+    ('~':'\\':p) -> (</> p) <$> getHomeDirectory
+    ('~':_)      -> ioError $ userError "~USERNAME in paths is not supported"
+    p            -> return p
 
 firstJust ms = case dropWhile (==Nothing) ms of
     [] -> Nothing
     (md:_) -> md
 
--- | Read a file in universal newline mode, handling any of the usual line ending conventions.
-readFile' :: FilePath -> IO Text
-readFile' name =  do
-  h <- openFile name ReadMode
-  hSetNewlineMode h universalNewlineMode
-  T.hGetContents h
+-- | Read text from a file, 
+-- handling any of the usual line ending conventions,
+-- using the system locale's text encoding,
+-- ignoring any utf8 BOM prefix (as seen in paypal's 2018 CSV, eg) if that encoding is utf8. 
+readFilePortably :: FilePath -> IO Text
+readFilePortably f =  openFile f ReadMode >>= readHandlePortably
 
--- | Read a file in universal newline mode, handling any of the usual line ending conventions.
-readFileAnyLineEnding :: FilePath -> IO Text
-readFileAnyLineEnding path =  do
-  h <- openFile path ReadMode
-  hSetNewlineMode h universalNewlineMode
-  T.hGetContents h
-
--- | Read the given file, or standard input if the path is "-", using
--- universal newline mode.
-readFileOrStdinAnyLineEnding :: String -> IO Text
-readFileOrStdinAnyLineEnding f = do
-  h <- fileHandle f
-  hSetNewlineMode h universalNewlineMode
-  T.hGetContents h
+-- | Like readFilePortably, but read from standard input if the path is "-". 
+readFileOrStdinPortably :: String -> IO Text
+readFileOrStdinPortably f = openFileOrStdin f ReadMode >>= readHandlePortably
   where
-    fileHandle "-" = return stdin
-    fileHandle f = openFile f ReadMode
+    openFileOrStdin :: String -> IOMode -> IO Handle
+    openFileOrStdin "-" _ = return stdin
+    openFileOrStdin f m   = openFile f m
+
+readHandlePortably :: Handle -> IO Text
+readHandlePortably h = do
+  hSetNewlineMode h universalNewlineMode
+  menc <- hGetEncoding h
+  when (fmap show menc == Just "UTF-8") $  -- XXX no Eq instance, rely on Show
+    hSetEncoding h utf8_bom
+  T.hGetContents h
 
 -- | Total version of maximum, for integral types, giving 0 for an empty list.
 maximum' :: Integral a => [a] -> a
 maximum' [] = 0
-maximum' xs = maximum xs
+maximum' xs = maximumStrict xs
+
+-- | Strict version of sum that doesn’t leak space
+{-# INLINABLE sumStrict #-}
+sumStrict :: Num a => [a] -> a
+sumStrict = foldl' (+) 0
+
+-- | Strict version of maximum that doesn’t leak space
+{-# INLINABLE maximumStrict #-}
+maximumStrict :: Ord a => [a] -> a
+maximumStrict = foldl1' max
+
+-- | Strict version of minimum that doesn’t leak space
+{-# INLINABLE minimumStrict #-}
+minimumStrict :: Ord a => [a] -> a
+minimumStrict = foldl1' min
+
+-- | This is a version of sequence based on difference lists. It is
+-- slightly faster but we mostly use it because it uses the heap
+-- instead of the stack. This has the advantage that Neil Mitchell’s
+-- trick of limiting the stack size to discover space leaks doesn’t
+-- show this as a false positive.
+{-# INLINABLE sequence' #-}
+sequence' :: Monad f => [f a] -> f [a]
+sequence' ms = do
+  h <- go id ms
+  return (h [])
+  where
+    go h [] = return h
+    go h (m:ms) = do
+      x <- m
+      go (h . (x :)) ms
+
+-- | Like mapM but uses sequence'.
+{-# INLINABLE mapM' #-}
+mapM' :: Monad f => (a -> f b) -> [a] -> f [b]
+mapM' f = sequence' . map f
+
+-- | Like embedFile, but takes a path relative to the package directory.
+-- Similar to embedFileRelative ?
+embedFileRelative :: FilePath -> Q Exp
+embedFileRelative f = makeRelativeToProject f >>= embedStringFile
+
+-- -- | Like hereFile, but takes a path relative to the package directory.
+-- -- Similar to embedFileRelative ?
+-- hereFileRelative :: FilePath -> Q Exp
+-- hereFileRelative f = makeRelativeToProject f >>= hereFileExp
+--   where
+--     QuasiQuoter{quoteExp=hereFileExp} = hereFile
+    
+tests_Utils = tests "Utils" [
+  tests_Text
+  ]

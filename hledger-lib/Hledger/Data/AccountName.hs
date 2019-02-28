@@ -1,4 +1,6 @@
-{-# LANGUAGE NoMonomorphismRestriction, OverloadedStrings #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE CPP #-}
 {-|
 
 'AccountName's are strings like @assets:cash:petty@, with multiple
@@ -7,19 +9,51 @@ hierarchy.
 
 -}
 
-module Hledger.Data.AccountName
+module Hledger.Data.AccountName (
+   accountLeafName
+  ,accountNameComponents
+  ,accountNameDrop
+  ,accountNameFromComponents
+  ,accountNameLevel
+  ,accountNameToAccountOnlyRegex
+  ,accountNameToAccountRegex
+  ,accountNameTreeFrom
+  ,accountRegexToAccountName
+  ,accountSummarisedName
+  ,acctsep
+  ,acctsepchar
+  ,clipAccountName
+  ,clipOrEllipsifyAccountName
+  ,elideAccountName
+  ,escapeName
+  ,expandAccountName
+  ,expandAccountNames
+  ,isAccountNamePrefixOf
+--  ,isAccountRegex 
+  ,isSubAccountNameOf
+  ,parentAccountName
+  ,parentAccountNames
+  ,subAccountNamesFrom
+  ,topAccountNames
+  ,unbudgetedAccountName
+  ,tests_AccountName
+)
 where
+
 import Data.List
+#if !(MIN_VERSION_base(4,11,0))
 import Data.Monoid
+#endif
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Tree
-import Test.HUnit
 import Text.Printf
 
 import Hledger.Data.Types
-import Hledger.Utils
+import Hledger.Utils 
 
+-- $setup
+-- >>> :set -XOverloadedStrings
 
 acctsepchar :: Char
 acctsepchar = ':'
@@ -43,7 +77,7 @@ accountLeafName = last . accountNameComponents
 accountSummarisedName :: AccountName -> Text
 accountSummarisedName a
   --   length cs > 1 = take 2 (head cs) ++ ":" ++ a'
-  | length cs > 1 = (T.intercalate ":" (map (T.take 2) $ init cs)) <> ":" <> a'
+  | length cs > 1 = T.intercalate ":" (map (T.take 2) $ init cs) <> ":" <> a'
   | otherwise     = a'
     where
       cs = accountNameComponents a
@@ -53,12 +87,30 @@ accountNameLevel :: AccountName -> Int
 accountNameLevel "" = 0
 accountNameLevel a = T.length (T.filter (==acctsepchar) a) + 1
 
-accountNameDrop :: Int -> AccountName -> AccountName
-accountNameDrop n = accountNameFromComponents . drop n . accountNameComponents
+-- | A top-level account prefixed to some accounts in budget reports.
+-- Defined here so it can be ignored by accountNameDrop. 
+unbudgetedAccountName :: T.Text
+unbudgetedAccountName = "<unbudgeted>"
 
--- | ["a:b:c","d:e"] -> ["a","a:b","a:b:c","d","d:e"]
+-- | Remove some number of account name components from the front of the account name.
+-- If the special "<unbudgeted>" top-level account is present, it is preserved and
+-- dropping affects the rest of the account name. 
+accountNameDrop :: Int -> AccountName -> AccountName
+accountNameDrop n a
+  | a == unbudgetedAccountName = a
+  | unbudgetedAccountAndSep `T.isPrefixOf` a =
+      case accountNameDrop n $ T.drop (T.length unbudgetedAccountAndSep) a of
+        "" -> unbudgetedAccountName
+        a' -> unbudgetedAccountAndSep <> a'
+  | otherwise = accountNameFromComponents $ drop n $ accountNameComponents a
+  where 
+    unbudgetedAccountAndSep = unbudgetedAccountName <> acctsep
+
+-- | Sorted unique account names implied by these account names,
+-- ie these plus all their parent accounts up to the root.
+-- Eg: ["a:b:c","d:e"] -> ["a","a:b","a:b:c","d","d:e"]
 expandAccountNames :: [AccountName] -> [AccountName]
-expandAccountNames as = nub $ concatMap expandAccountName as
+expandAccountNames as = nub $ sort $ concatMap expandAccountName as
 
 -- | "a:b:c" -> ["a","a:b","a:b:c"]
 expandAccountName :: AccountName -> [AccountName]
@@ -100,7 +152,7 @@ accountNameTreeFrom accts =
           accounttreesfrom as = [Node a (accounttreesfrom $ subs a) | a <- as]
           subs = subAccountNamesFrom (expandAccountNames accts)
 
-nullaccountnametree = Node "root" []
+--nullaccountnametree = Node "root" []
 
 -- | Elide an account name to fit in the specified width.
 -- From the ledger 2.6 news:
@@ -123,11 +175,11 @@ elideAccountName width s
   | " (split)" `T.isSuffixOf` s =
     let
       names = T.splitOn ", " $ T.take (T.length s - 8) s
-      widthpername = (max 0 (width - 8 - 2 * (max 1 (length names) - 1))) `div` length names
+      widthpername = max 0 (width - 8 - 2 * (max 1 (length names) - 1)) `div` length names
     in
      fitText Nothing (Just width) True False $
      (<>" (split)") $
-     T.intercalate ", " $
+     T.intercalate ", "
      [accountNameFromComponents $ elideparts widthpername [] $ accountNameComponents s' | s' <- names]
   | otherwise =
     fitText Nothing (Just width) True False $ accountNameFromComponents $ elideparts width [] $ accountNameComponents s
@@ -149,47 +201,53 @@ clipOrEllipsifyAccountName :: Int -> AccountName -> AccountName
 clipOrEllipsifyAccountName 0 = const "..."
 clipOrEllipsifyAccountName n = accountNameFromComponents . take n . accountNameComponents
 
+-- | Escape an AccountName for use within a regular expression.
+-- >>> putStr $ escapeName "First?!#$*?$(*) !@^#*? %)*!@#"
+-- First\?!#\$\*\?\$\(\*\) !@\^#\*\? %\)\*!@#
+escapeName :: AccountName -> Regexp
+escapeName = regexReplaceBy "[[?+|()*\\\\^$]" ("\\" <>)
+           . T.unpack
+
 -- | Convert an account name to a regular expression matching it and its subaccounts.
 accountNameToAccountRegex :: AccountName -> Regexp
 accountNameToAccountRegex "" = ""
-accountNameToAccountRegex a = printf "^%s(:|$)" (T.unpack a)
+accountNameToAccountRegex a = printf "^%s(:|$)" (escapeName a)
 
 -- | Convert an account name to a regular expression matching it but not its subaccounts.
 accountNameToAccountOnlyRegex :: AccountName -> Regexp
 accountNameToAccountOnlyRegex "" = ""
-accountNameToAccountOnlyRegex a = printf "^%s$"  $ T.unpack a -- XXX pack
+accountNameToAccountOnlyRegex a = printf "^%s$"  $ escapeName a -- XXX pack
 
 -- | Convert an exact account-matching regular expression to a plain account name.
 accountRegexToAccountName :: Regexp -> AccountName
 accountRegexToAccountName = T.pack . regexReplace "^\\^(.*?)\\(:\\|\\$\\)$" "\\1" -- XXX pack
 
--- | Does this string look like an exact account-matching regular expression ?
-isAccountRegex  :: String -> Bool
-isAccountRegex s = take 1 s == "^" && (take 5 $ reverse s) == ")$|:("
+-- -- | Does this string look like an exact account-matching regular expression ?
+--isAccountRegex  :: String -> Bool
+--isAccountRegex s = take 1 s == "^" && take 5 (reverse s) == ")$|:("
 
-tests_Hledger_Data_AccountName = TestList
- [
-  "accountNameTreeFrom" ~: do
-    accountNameTreeFrom ["a"]       `is` Node "root" [Node "a" []]
-    accountNameTreeFrom ["a","b"]   `is` Node "root" [Node "a" [], Node "b" []]
-    accountNameTreeFrom ["a","a:b"] `is` Node "root" [Node "a" [Node "a:b" []]]
-    accountNameTreeFrom ["a:b:c"]   `is` Node "root" [Node "a" [Node "a:b" [Node "a:b:c" []]]]
-
-  ,"expandAccountNames" ~:
+tests_AccountName = tests "AccountName" [
+  tests "accountNameTreeFrom" [
+     accountNameTreeFrom ["a"]       `is` Node "root" [Node "a" []]
+    ,accountNameTreeFrom ["a","b"]   `is` Node "root" [Node "a" [], Node "b" []]
+    ,accountNameTreeFrom ["a","a:b"] `is` Node "root" [Node "a" [Node "a:b" []]]
+    ,accountNameTreeFrom ["a:b:c"]   `is` Node "root" [Node "a" [Node "a:b" [Node "a:b:c" []]]]
+  ]
+  ,tests "expandAccountNames" [
     expandAccountNames ["assets:cash","assets:checking","expenses:vacation"] `is`
      ["assets","assets:cash","assets:checking","expenses","expenses:vacation"]
-
-  ,"isAccountNamePrefixOf" ~: do
-    "assets" `isAccountNamePrefixOf` "assets" `is` False
-    "assets" `isAccountNamePrefixOf` "assets:bank" `is` True
-    "assets" `isAccountNamePrefixOf` "assets:bank:checking" `is` True
-    "my assets" `isAccountNamePrefixOf` "assets:bank" `is` False
-
-  ,"isSubAccountNameOf" ~: do
-    "assets" `isSubAccountNameOf` "assets" `is` False
-    "assets:bank" `isSubAccountNameOf` "assets" `is` True
-    "assets:bank:checking" `isSubAccountNameOf` "assets" `is` False
-    "assets:bank" `isSubAccountNameOf` "my assets" `is` False
-
+  ]
+  ,tests "isAccountNamePrefixOf" [
+     "assets" `isAccountNamePrefixOf` "assets" `is` False
+    ,"assets" `isAccountNamePrefixOf` "assets:bank" `is` True
+    ,"assets" `isAccountNamePrefixOf` "assets:bank:checking" `is` True
+    ,"my assets" `isAccountNamePrefixOf` "assets:bank" `is` False
+  ]
+  ,tests "isSubAccountNameOf" [
+     "assets" `isSubAccountNameOf` "assets" `is` False
+    ,"assets:bank" `isSubAccountNameOf` "assets" `is` True
+    ,"assets:bank:checking" `isSubAccountNameOf` "assets" `is` False
+    ,"assets:bank" `isSubAccountNameOf` "my assets" `is` False
+  ]
  ]
 

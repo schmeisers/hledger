@@ -40,26 +40,23 @@ i, o or O.  The meanings of the codes are:
 
 -}
 
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, PackageImports #-}
 
 module Hledger.Read.TimeclockReader (
   -- * Reader
   reader,
   -- * Misc other exports
   timeclockfilep,
-  -- * Tests
-  tests_Hledger_Read_TimeclockReader
 )
 where
 import           Prelude ()
-import           Prelude.Compat
+import "base-compat-batteries" Prelude.Compat
 import           Control.Monad
 import           Control.Monad.Except (ExceptT)
 import           Control.Monad.State.Strict
 import           Data.Maybe (fromMaybe)
 import           Data.Text (Text)
 import qualified Data.Text as T
-import           Test.HUnit
 import           Text.Megaparsec hiding (parse)
 
 import           Hledger.Data
@@ -79,10 +76,10 @@ reader = Reader
 -- | Parse and post-process a "Journal" from timeclock.el's timeclock
 -- format, saving the provided file path and the current time, or give an
 -- error.
-parse :: Maybe FilePath -> Bool -> FilePath -> Text -> ExceptT String IO Journal
-parse _ = parseAndFinaliseJournal timeclockfilep
+parse :: InputOpts -> FilePath -> Text -> ExceptT String IO Journal
+parse = parseAndFinaliseJournal' timeclockfilep
 
-timeclockfilep :: ErroringJournalParser IO ParsedJournal
+timeclockfilep :: MonadIO m => JournalParser m ParsedJournal
 timeclockfilep = do many timeclockitemp
                     eof
                     j@Journal{jparsetimeclockentries=es} <- get
@@ -100,21 +97,19 @@ timeclockfilep = do many timeclockitemp
       -- character, excepting transactions versus empty (blank or
       -- comment-only) lines, can use choice w/o try
       timeclockitemp = choice [ 
-                            void emptyorcommentlinep
+                            void (lift emptyorcommentlinep)
                           , timeclockentryp >>= \e -> modify' (\j -> j{jparsetimeclockentries = e : jparsetimeclockentries j})
                           ] <?> "timeclock entry, or default year or historical price directive"
 
 -- | Parse a timeclock entry.
-timeclockentryp :: JournalStateParser m TimeclockEntry
+timeclockentryp :: JournalParser m TimeclockEntry
 timeclockentryp = do
-  sourcepos <- genericSourcePos <$> lift getPosition
+  sourcepos <- genericSourcePos <$> lift getSourcePos
   code <- oneOf ("bhioO" :: [Char])
-  lift (some spacenonewline)
+  lift (skipSome spacenonewline)
   datetime <- datetimep
-  account <- fromMaybe "" <$> optional (lift (some spacenonewline) >> modifiedaccountnamep)
-  description <- T.pack . fromMaybe "" <$> lift (optional (some spacenonewline >> restofline))
+  account <- fromMaybe "" <$> optional (lift (skipSome spacenonewline) >> modifiedaccountnamep)
+  description <- T.pack . fromMaybe "" <$> lift (optional (skipSome spacenonewline >> restofline))
   return $ TimeclockEntry sourcepos (read [code]) datetime account description
 
-tests_Hledger_Read_TimeclockReader = TestList [
- ]
 

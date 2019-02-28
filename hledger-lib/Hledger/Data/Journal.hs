@@ -1,5 +1,11 @@
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE Rank2Types #-}
-{-# LANGUAGE StandaloneDeriving, OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
+
 {-|
 
 A 'Journal' is a set of transactions, plus optional related data.  This is
@@ -11,15 +17,17 @@ other data format (see "Hledger.Read").
 module Hledger.Data.Journal (
   -- * Parsing helpers
   addMarketPrice,
-  addModifierTransaction,
+  addTransactionModifier,
   addPeriodicTransaction,
   addTransaction,
-  journalApplyAliases,
   journalBalanceTransactions,
   journalApplyCommodityStyles,
   commodityStylesFromAmounts,
+  journalCommodityStyles,
   journalConvertAmountsToCost,
-  journalFinalise,
+  journalReverse,
+  journalSetLastReadTime,
+  journalPivot,
   -- * Filtering
   filterJournalTransactions,
   filterJournalPostings,
@@ -28,10 +36,16 @@ module Hledger.Data.Journal (
   filterTransactionPostings,
   filterPostingAmount,
   -- * Querying
-  journalAccountNames,
   journalAccountNamesUsed,
+  journalAccountNamesImplied,
+  journalAccountNamesDeclared,
+  journalAccountNamesDeclaredOrUsed,
+  journalAccountNamesDeclaredOrImplied,
+  journalAccountNames,
   -- journalAmountAndPriceCommodities,
   journalAmounts,
+  overJournalAmounts,
+  traverseJournalAmounts,
   -- journalCanonicalCommodities,
   journalDateSpan,
   journalDescriptions,
@@ -44,7 +58,7 @@ module Hledger.Data.Journal (
   -- * Standard account types
   journalBalanceSheetAccountQuery,
   journalProfitAndLossAccountQuery,
-  journalIncomeAccountQuery,
+  journalRevenueAccountQuery,
   journalExpenseAccountQuery,
   journalAssetAccountQuery,
   journalLiabilityAccountQuery,
@@ -57,40 +71,46 @@ module Hledger.Data.Journal (
   journalCheckBalanceAssertions,
   journalNumberAndTieTransactions,
   journalUntieTransactions,
+  journalModifyTransactions,
   -- * Tests
   samplejournal,
-  tests_Hledger_Data_Journal,
+  tests_Journal,
 )
 where
-import Control.Arrow
+import Control.Applicative (Const(..))
 import Control.Monad
 import Control.Monad.Except
-import qualified Control.Monad.Reader as R
+import Control.Monad.Extra
+import Control.Monad.Reader as R
 import Control.Monad.ST
 import Data.Array.ST
-import qualified Data.HashTable.ST.Cuckoo as HT
+import Data.Function ((&))
+import Data.Functor.Identity (Identity(..))
+import qualified Data.HashTable.ST.Cuckoo as H
 import Data.List
--- import Data.Map (findWithDefault)
+import Data.List.Extra (groupSort)
+import qualified Data.Map as M
 import Data.Maybe
+#if !(MIN_VERSION_base(4,11,0))
 import Data.Monoid
-import Data.Ord
+#endif
+import qualified Data.Semigroup as Sem
+import qualified Data.Set as S
 import Data.Text (Text)
 import qualified Data.Text as T
 import Safe (headMay, headDef)
 import Data.Time.Calendar
 import Data.Tree
 import System.Time (ClockTime(TOD))
-import Test.HUnit
 import Text.Printf
-import qualified Data.Map as M
 
-import Hledger.Utils
+import Hledger.Utils 
 import Hledger.Data.Types
 import Hledger.Data.AccountName
 import Hledger.Data.Amount
--- import Hledger.Data.Commodity
 import Hledger.Data.Dates
 import Hledger.Data.Transaction
+import Hledger.Data.TransactionModifier
 import Hledger.Data.Posting
 import Hledger.Query
 
@@ -104,22 +124,16 @@ instance Show Journal where
   show j
     | debugLevel < 3 = printf "Journal %s with %d transactions, %d accounts"
              (journalFilePath j)
-             (length (jtxns j) +
-              length (jmodifiertxns j) +
-              length (jperiodictxns j))
+             (length $ jtxns j)
              (length accounts)
     | debugLevel < 6 = printf "Journal %s with %d transactions, %d accounts: %s"
              (journalFilePath j)
-             (length (jtxns j) +
-              length (jmodifiertxns j) +
-              length (jperiodictxns j))
+             (length $ jtxns j)
              (length accounts)
              (show accounts)
     | otherwise = printf "Journal %s with %d transactions, %d accounts: %s, commodity styles: %s"
              (journalFilePath j)
-             (length (jtxns j) +
-              length (jmodifiertxns j) +
-              length (jperiodictxns j))
+             (length $ jtxns j)
              (length accounts)
              (show accounts)
              (show $ jinferredcommodities j)
@@ -129,7 +143,7 @@ instance Show Journal where
 -- showJournalDebug j = unlines [
 --                       show j
 --                      ,show (jtxns j)
---                      ,show (jmodifiertxns j)
+--                      ,show (jtxnmodifiers j)
 --                      ,show (jperiodictxns j)
 --                      ,show $ jparsetimeclockentries j
 --                      ,show $ jmarketprices j
@@ -149,26 +163,34 @@ instance Show Journal where
 -- CHILD <> PARENT. A parsed journal's data is in reverse order, so
 -- this gives what we want.
 --
-instance Monoid Journal where
-  mempty = nulljournal
-  mappend j1 j2 = Journal {
+instance Sem.Semigroup Journal where
+  j1 <> j2 = Journal {
      jparsedefaultyear          = jparsedefaultyear          j2
     ,jparsedefaultcommodity     = jparsedefaultcommodity     j2
     ,jparseparentaccounts       = jparseparentaccounts       j2
     ,jparsealiases              = jparsealiases              j2
     -- ,jparsetransactioncount     = jparsetransactioncount     j1 +  jparsetransactioncount     j2
-    ,jparsetimeclockentries = jparsetimeclockentries j1 <> jparsetimeclockentries j2
-    ,jaccounts                  = jaccounts                  j1 <> jaccounts                  j2
+    ,jparsetimeclockentries     = jparsetimeclockentries j1 <> jparsetimeclockentries j2
+    ,jincludefilestack          = jincludefilestack          j2
+    ,jdeclaredaccounts          = jdeclaredaccounts          j1 <> jdeclaredaccounts          j2
+    ,jdeclaredaccounttypes      = jdeclaredaccounttypes      j1 <> jdeclaredaccounttypes      j2
     ,jcommodities               = jcommodities               j1 <> jcommodities               j2
     ,jinferredcommodities       = jinferredcommodities       j1 <> jinferredcommodities       j2
     ,jmarketprices              = jmarketprices              j1 <> jmarketprices              j2
-    ,jmodifiertxns              = jmodifiertxns              j1 <> jmodifiertxns              j2
+    ,jtxnmodifiers              = jtxnmodifiers              j1 <> jtxnmodifiers              j2
     ,jperiodictxns              = jperiodictxns              j1 <> jperiodictxns              j2
     ,jtxns                      = jtxns                      j1 <> jtxns                      j2
-    ,jfinalcommentlines         = jfinalcommentlines         j2
+    ,jfinalcommentlines         = jfinalcommentlines         j2  -- XXX discards j1's ?
     ,jfiles                     = jfiles                     j1 <> jfiles                     j2
     ,jlastreadtime              = max (jlastreadtime j1) (jlastreadtime j2)
     }
+
+instance Monoid Journal where
+  mempty = nulljournal
+#if !(MIN_VERSION_base(4,11,0))
+  -- This is redundant starting with base-4.11 / GHC 8.4.
+  mappend = (Sem.<>)
+#endif
 
 nulljournal :: Journal
 nulljournal = Journal {
@@ -177,12 +199,14 @@ nulljournal = Journal {
   ,jparseparentaccounts       = []
   ,jparsealiases              = []
   -- ,jparsetransactioncount     = 0
-  ,jparsetimeclockentries = []
-  ,jaccounts                  = []
-  ,jcommodities               = M.fromList []
-  ,jinferredcommodities       = M.fromList []
+  ,jparsetimeclockentries     = []
+  ,jincludefilestack          = []
+  ,jdeclaredaccounts          = []
+  ,jdeclaredaccounttypes      = M.empty
+  ,jcommodities               = M.empty
+  ,jinferredcommodities       = M.empty
   ,jmarketprices              = []
-  ,jmodifiertxns              = []
+  ,jtxnmodifiers              = []
   ,jperiodictxns              = []
   ,jtxns                      = []
   ,jfinalcommentlines         = ""
@@ -202,8 +226,8 @@ mainfile = headDef ("", "") . jfiles
 addTransaction :: Transaction -> Journal -> Journal
 addTransaction t j = j { jtxns = t : jtxns j }
 
-addModifierTransaction :: ModifierTransaction -> Journal -> Journal
-addModifierTransaction mt j = j { jmodifiertxns = mt : jmodifiertxns j }
+addTransactionModifier :: TransactionModifier -> Journal -> Journal
+addTransactionModifier mt j = j { jtxnmodifiers = mt : jtxnmodifiers j }
 
 addPeriodicTransaction :: PeriodicTransaction -> Journal -> Journal
 addPeriodicTransaction pt j = j { jperiodictxns = pt : jperiodictxns j }
@@ -233,65 +257,117 @@ journalDescriptions = nub . sort . map tdescription . jtxns
 journalPostings :: Journal -> [Posting]
 journalPostings = concatMap tpostings . jtxns
 
--- | Unique account names posted to in this journal.
+-- | Sorted unique account names posted to by this journal's transactions.
 journalAccountNamesUsed :: Journal -> [AccountName]
-journalAccountNamesUsed = sort . accountNamesFromPostings . journalPostings
+journalAccountNamesUsed = accountNamesFromPostings . journalPostings
 
--- | Unique account names in this journal, including parent accounts containing no postings.
+-- | Sorted unique account names implied by this journal's transactions - 
+-- accounts posted to and all their implied parent accounts.
+journalAccountNamesImplied :: Journal -> [AccountName]
+journalAccountNamesImplied = expandAccountNames . journalAccountNamesUsed
+
+-- | Sorted unique account names declared by account directives in this journal.
+journalAccountNamesDeclared :: Journal -> [AccountName]
+journalAccountNamesDeclared = nub . sort . map fst . jdeclaredaccounts
+
+-- | Sorted unique account names declared by account directives or posted to
+-- by transactions in this journal.
+journalAccountNamesDeclaredOrUsed :: Journal -> [AccountName]
+journalAccountNamesDeclaredOrUsed j = nub $ sort $ journalAccountNamesDeclared j ++ journalAccountNamesUsed j
+
+-- | Sorted unique account names declared by account directives, or posted to
+-- or implied as parents by transactions in this journal.
+journalAccountNamesDeclaredOrImplied :: Journal -> [AccountName]
+journalAccountNamesDeclaredOrImplied j = nub $ sort $ journalAccountNamesDeclared j ++ journalAccountNamesImplied j
+
+-- | Convenience/compatibility alias for journalAccountNamesDeclaredOrImplied.
 journalAccountNames :: Journal -> [AccountName]
-journalAccountNames = sort . expandAccountNames . journalAccountNamesUsed
+journalAccountNames = journalAccountNamesDeclaredOrImplied 
 
 journalAccountNameTree :: Journal -> Tree AccountName
 journalAccountNameTree = accountNameTreeFrom . journalAccountNames
 
--- standard account types
+-- queries for standard account types
 
--- | A query for Profit & Loss accounts in this journal.
--- Cf <http://en.wikipedia.org/wiki/Chart_of_accounts#Profit_.26_Loss_accounts>.
-journalProfitAndLossAccountQuery  :: Journal -> Query
-journalProfitAndLossAccountQuery j = Or [journalIncomeAccountQuery j
-                                               ,journalExpenseAccountQuery j
-                                               ]
+-- | Get a query for accounts of a certain type (Asset, Liability..) in this journal.  
+-- The query will match all accounts which were declared as that type by account directives, 
+-- plus all their subaccounts which have not been declared as a different type. 
+-- If no accounts were declared as this type, the query will instead match accounts 
+-- with names matched by the provided case-insensitive regular expression.
+journalAccountTypeQuery :: AccountType -> Regexp -> Journal -> Query
+journalAccountTypeQuery atype fallbackregex j =
+  case M.lookup atype (jdeclaredaccounttypes j) of
+    Nothing -> Acct fallbackregex
+    Just as ->
+      -- XXX Query isn't able to match account type since that requires extra info from the journal. 
+      -- So we do a hacky search by name instead.
+      And [ 
+         Or $ map (Acct . accountNameToAccountRegex) as
+        ,Not $ Or $ map (Acct . accountNameToAccountRegex) differentlytypedsubs
+        ]
+      where
+        differentlytypedsubs = concat 
+          [subs | (t,bs) <- M.toList (jdeclaredaccounttypes j)
+              , t /= atype
+              , let subs = [b | b <- bs, any (`isAccountNamePrefixOf` b) as]
+          ]
 
--- | A query for Income (Revenue) accounts in this journal.
--- This is currently hard-coded to the case-insensitive regex @^(income|revenue)s?(:|$)@.
-journalIncomeAccountQuery  :: Journal -> Query
-journalIncomeAccountQuery _ = Acct "^(income|revenue)s?(:|$)"
+-- | A query for accounts in this journal which have been
+-- declared as Asset by account directives, or otherwise for
+-- accounts with names matched by the case-insensitive regular expression 
+-- @^assets?(:|$)@.
+journalAssetAccountQuery :: Journal -> Query
+journalAssetAccountQuery = journalAccountTypeQuery Asset "^assets?(:|$)"
 
--- | A query for Expense accounts in this journal.
--- This is currently hard-coded to the case-insensitive regex @^expenses?(:|$)@.
+-- | A query for accounts in this journal which have been
+-- declared as Liability by account directives, or otherwise for
+-- accounts with names matched by the case-insensitive regular expression 
+-- @^(debts?|liabilit(y|ies))(:|$)@.
+journalLiabilityAccountQuery :: Journal -> Query
+journalLiabilityAccountQuery = journalAccountTypeQuery Liability "^(debts?|liabilit(y|ies))(:|$)"
+
+-- | A query for accounts in this journal which have been
+-- declared as Equity by account directives, or otherwise for
+-- accounts with names matched by the case-insensitive regular expression 
+-- @^equity(:|$)@.
+journalEquityAccountQuery :: Journal -> Query
+journalEquityAccountQuery = journalAccountTypeQuery Equity "^equity(:|$)"
+
+-- | A query for accounts in this journal which have been
+-- declared as Revenue by account directives, or otherwise for
+-- accounts with names matched by the case-insensitive regular expression 
+-- @^(income|revenue)s?(:|$)@.
+journalRevenueAccountQuery :: Journal -> Query
+journalRevenueAccountQuery = journalAccountTypeQuery Revenue "^(income|revenue)s?(:|$)"
+
+-- | A query for accounts in this journal which have been
+-- declared as Expense by account directives, or otherwise for
+-- accounts with names matched by the case-insensitive regular expression 
+-- @^(income|revenue)s?(:|$)@.
 journalExpenseAccountQuery  :: Journal -> Query
-journalExpenseAccountQuery _ = Acct "^expenses?(:|$)"
+journalExpenseAccountQuery = journalAccountTypeQuery Expense "^expenses?(:|$)"
 
 -- | A query for Asset, Liability & Equity accounts in this journal.
 -- Cf <http://en.wikipedia.org/wiki/Chart_of_accounts#Balance_Sheet_Accounts>.
 journalBalanceSheetAccountQuery  :: Journal -> Query
 journalBalanceSheetAccountQuery j = Or [journalAssetAccountQuery j
-                                              ,journalLiabilityAccountQuery j
-                                              ,journalEquityAccountQuery j
-                                              ]
+                                       ,journalLiabilityAccountQuery j
+                                       ,journalEquityAccountQuery j
+                                       ]
 
--- | A query for Asset accounts in this journal.
--- This is currently hard-coded to the case-insensitive regex @^assets?(:|$)@.
-journalAssetAccountQuery  :: Journal -> Query
-journalAssetAccountQuery _ = Acct "^assets?(:|$)"
-
--- | A query for Liability accounts in this journal.
--- This is currently hard-coded to the case-insensitive regex @^(debts?|liabilit(y|ies))(:|$)@.
-journalLiabilityAccountQuery  :: Journal -> Query
-journalLiabilityAccountQuery _ = Acct "^(debts?|liabilit(y|ies))(:|$)"
-
--- | A query for Equity accounts in this journal.
--- This is currently hard-coded to the case-insensitive regex @^equity(:|$)@.
-journalEquityAccountQuery  :: Journal -> Query
-journalEquityAccountQuery _ = Acct "^equity(:|$)"
+-- | A query for Profit & Loss accounts in this journal.
+-- Cf <http://en.wikipedia.org/wiki/Chart_of_accounts#Profit_.26_Loss_accounts>.
+journalProfitAndLossAccountQuery  :: Journal -> Query
+journalProfitAndLossAccountQuery j = Or [journalRevenueAccountQuery j
+                                        ,journalExpenseAccountQuery j
+                                        ]
 
 -- | A query for Cash (-equivalent) accounts in this journal (ie,
 -- accounts which appear on the cashflow statement.)  This is currently
--- hard-coded to be all the Asset accounts except for those containing the
--- case-insensitive regex @(receivable|A/R)@.
+-- hard-coded to be all the Asset accounts except for those with names 
+-- containing the case-insensitive regular expression @(receivable|:A/R|:fixed)@.
 journalCashAccountQuery  :: Journal -> Query
-journalCashAccountQuery j = And [journalAssetAccountQuery j, Not $ Acct "(receivable|A/R)"]
+journalCashAccountQuery j = And [journalAssetAccountQuery j, Not $ Acct "(receivable|:A/R|:fixed)"]
 
 -- Various kinds of filtering on journals. We do it differently depending
 -- on the command.
@@ -342,7 +418,7 @@ filterJournalTransactions FilterSpec{datespan=datespan
                                     ,depth=depth
                                     ,fMetadata=md
                                     } =
-    filterJournalTransactionsByClearedStatus cleared .
+    filterJournalTransactionsByStatus cleared .
     filterJournalPostingsByDepth depth .
     filterJournalTransactionsByAccount apats .
     filterJournalTransactionsByMetadata md .
@@ -362,7 +438,7 @@ filterJournalPostings FilterSpec{datespan=datespan
                                 ,fMetadata=md
                                 } =
     filterJournalPostingsByRealness real .
-    filterJournalPostingsByClearedStatus cleared .
+    filterJournalPostingsByStatus cleared .
     filterJournalPostingsByEmpty empty .
     filterJournalPostingsByDepth depth .
     filterJournalPostingsByAccount apats .
@@ -389,16 +465,16 @@ filterJournalTransactionsByDate (DateSpan begin end) j@Journal{jtxns=ts} = j{jtx
 
 -- | Keep only transactions which have the requested cleared/uncleared
 -- status, if there is one.
-filterJournalTransactionsByClearedStatus :: Maybe Bool -> Journal -> Journal
-filterJournalTransactionsByClearedStatus Nothing j = j
-filterJournalTransactionsByClearedStatus (Just val) j@Journal{jtxns=ts} = j{jtxns=filter match ts}
+filterJournalTransactionsByStatus :: Maybe Bool -> Journal -> Journal
+filterJournalTransactionsByStatus Nothing j = j
+filterJournalTransactionsByStatus (Just val) j@Journal{jtxns=ts} = j{jtxns=filter match ts}
     where match = (==val).tstatus
 
 -- | Keep only postings which have the requested cleared/uncleared status,
 -- if there is one.
-filterJournalPostingsByClearedStatus :: Maybe Bool -> Journal -> Journal
-filterJournalPostingsByClearedStatus Nothing j = j
-filterJournalPostingsByClearedStatus (Just c) j@Journal{jtxns=ts} = j{jtxns=map filterpostings ts}
+filterJournalPostingsByStatus :: Maybe Bool -> Journal -> Journal
+filterJournalPostingsByStatus Nothing j = j
+filterJournalPostingsByStatus (Just c) j@Journal{jtxns=ts} = j{jtxns=map filterpostings ts}
     where filterpostings t@Transaction{tpostings=ps} = t{tpostings=filter ((==c) . postingCleared) ps}
 
 -- | Strip out any virtual postings, if the flag is true, otherwise do
@@ -451,35 +527,23 @@ filterJournalTransactionsByAccount apats j@Journal{jtxns=ts} = j{jtxns=filter tm
 
 -}
 
--- | Apply additional account aliases (eg from the command-line) to all postings in a journal.
-journalApplyAliases :: [AccountAlias] -> Journal -> Journal
-journalApplyAliases aliases j@Journal{jtxns=ts} =
-  -- (if null aliases
-  --  then id
-  --  else (dbgtrace $
-  --        "applying additional command-line aliases:\n"
-  --        ++ chomp (unlines $ map (" "++) $ lines $ ppShow aliases))) $
-  j{jtxns=map dotransaction ts}
-    where
-      dotransaction t@Transaction{tpostings=ps} = t{tpostings=map doposting ps}
-      doposting p@Posting{paccount=a} = p{paccount= accountNameApplyAliases aliases a}
+-- | Reverse parsed data to normal order. This is used for post-parse
+-- processing, since data is added to the head of the list during
+-- parsing.
+journalReverse :: Journal -> Journal
+journalReverse j =
+  j {jfiles            = reverse $ jfiles j
+    ,jdeclaredaccounts = reverse $ jdeclaredaccounts j
+    ,jtxns             = reverse $ jtxns j
+    ,jtxnmodifiers     = reverse $ jtxnmodifiers j
+    ,jperiodictxns     = reverse $ jperiodictxns j
+    ,jmarketprices     = reverse $ jmarketprices j
+    }
 
--- | Do post-parse processing on a parsed journal to make it ready for
--- use.  Reverse parsed data to normal order, canonicalise amount
--- formats, check/ensure that transactions are balanced, and maybe
--- check balance assertions.
-journalFinalise :: ClockTime -> FilePath -> Text -> Bool -> ParsedJournal -> Either String Journal
-journalFinalise t path txt assrt j@Journal{jfiles=fs} = do
-  (journalTieTransactions <$>
-    (journalBalanceTransactions assrt $
-    journalApplyCommodityStyles $
-    j{ jfiles        = (path,txt) : reverse fs
-     , jlastreadtime = t
-     , jtxns         = reverse $ jtxns j -- NOTE: see addTransaction
-     , jmodifiertxns = reverse $ jmodifiertxns j -- NOTE: see addModifierTransaction
-     , jperiodictxns = reverse $ jperiodictxns j -- NOTE: see addPeriodicTransaction
-     , jmarketprices = reverse $ jmarketprices j -- NOTE: see addMarketPrice
-     }))
+-- | Set this journal's last read time, ie when its files were last read.
+journalSetLastReadTime :: ClockTime -> Journal -> Journal
+journalSetLastReadTime t j = j{ jlastreadtime = t }
+
 
 journalNumberAndTieTransactions = journalTieTransactions . journalNumberTransactions
 
@@ -497,211 +561,327 @@ journalTieTransactions j@Journal{jtxns=ts} = j{jtxns=map txnTieKnot ts}
 journalUntieTransactions :: Transaction -> Transaction
 journalUntieTransactions t@Transaction{tpostings=ps} = t{tpostings=map (\p -> p{ptransaction=Nothing}) ps}
 
--- | Check any balance assertions in the journal and return an error
--- message if any of them fail.
-journalCheckBalanceAssertions :: Journal -> Either String Journal
-journalCheckBalanceAssertions j =
-  runST $ journalBalanceTransactionsST True j
-  (return ()) (\_ _ -> return ()) (const $ return j) -- noops
+-- | Apply any transaction modifier rules in the journal 
+-- (adding automated postings to transactions, eg).
+journalModifyTransactions :: Journal -> Journal
+journalModifyTransactions j = j{ jtxns = modifyTransactions (jtxnmodifiers j) (jtxns j) }
 
+-- | Check any balance assertions in the journal and return an error message
+-- if any of them fail (or if the transaction balancing they require fails).
+journalCheckBalanceAssertions :: Journal -> Maybe String
+journalCheckBalanceAssertions = either Just (const Nothing) . journalBalanceTransactions True
 
--- | Check a posting's balance assertion and return an error if it
--- fails.
-checkBalanceAssertion :: Posting -> MixedAmount -> Either String ()
-checkBalanceAssertion p@Posting{ pbalanceassertion = Just ass} amt
-  | isReallyZeroAmount diff = Right ()
-  | True    = Left err
-    where assertedcomm = acommodity ass
-          actualbal = fromMaybe nullamt $ find ((== assertedcomm) . acommodity) (amounts amt)
-          diff = ass - actualbal
-          diffplus | isNegativeAmount diff == False = "+"
-                   | otherwise = ""
-          err = printf (unlines
-                        [ "balance assertion error%s",
-                          "after posting:",
-                          "%s",
-                          "balance assertion details:",
-                          "date:       %s",
-                          "account:    %s",
-                          "commodity:  %s",
-                          "calculated: %s",
-                          "asserted:   %s (difference: %s)"
-                        ])
-            (case ptransaction p of
-               Nothing -> ":" -- shouldn't happen
-               Just t ->  printf " in \"%s\" (line %d, column %d):\nin transaction:\n%s"
-                          f l c (chomp $ show t) :: String
-                 where GenericSourcePos f l c = tsourcepos t)
-            (showPostingLine p)
-            (showDate $ postingDate p)
-            (T.unpack $ paccount p) -- XXX pack
-            assertedcomm
-            (showAmount actualbal)
-            (showAmount ass)
-            (diffplus ++ showAmount diff)
-checkBalanceAssertion _ _ = Right ()
+-- "Transaction balancing" - inferring missing amounts and checking transaction balancedness and balance assertions
 
--- | Environment for 'CurrentBalancesModifier'
-data Env s = Env { eBalances :: HT.HashTable s AccountName MixedAmount
-                 , eStoreTx :: Transaction -> ST s ()
-                 , eAssrt :: Bool
-                 , eStyles :: Maybe (M.Map CommoditySymbol AmountStyle) }
+-- | Monad used for statefully balancing/amount-inferring/assertion-checking 
+-- a sequence of transactions.
+-- Perhaps can be simplified, or would a different ordering of layers make sense ?
+-- If you see a way, let us know.
+type Balancing s = ReaderT (BalancingState s) (ExceptT String (ST s))
 
--- | Monad transformer stack with a reference to a mutable hashtable
--- of current account balances and a mutable array of finished
--- transactions in original parsing order.
-type CurrentBalancesModifier s = R.ReaderT (Env s) (ExceptT String (ST s))
+-- | The state used while balancing a sequence of transactions.
+data BalancingState s = BalancingState {
+   -- read only
+   bsStyles       :: Maybe (M.Map CommoditySymbol AmountStyle)  -- ^ commodity display styles
+  ,bsUnassignable :: S.Set AccountName                          -- ^ accounts in which balance assignments may not be used
+  ,bsAssrt        :: Bool                                       -- ^ whether to check balance assertions
+   -- mutable
+  ,bsBalances     :: H.HashTable s AccountName MixedAmount      -- ^ running account balances, initially empty
+  ,bsTransactions :: STArray s Integer Transaction              -- ^ the transactions being balanced
+  }
 
--- | Fill in any missing amounts and check that all journal transactions
--- balance, or return an error message. This is done after parsing all
--- amounts and applying canonical commodity styles, since balancing
--- depends on display precision. Reports only the first error encountered.
-journalBalanceTransactions :: Bool -> Journal -> Either String Journal
-journalBalanceTransactions assrt j =
-  runST $ journalBalanceTransactionsST assrt (journalNumberTransactions j)
-  (newArray_ (1, genericLength $ jtxns j)
-   :: forall s. ST s (STArray s Integer Transaction))
-  (\arr tx -> writeArray arr (tindex tx) tx)
-  $ fmap (\txns -> j{ jtxns = txns}) . getElems
+-- | Access the current balancing state, and possibly modify the mutable bits,
+-- lifting through the Except and Reader layers into the Balancing monad.
+withB :: (BalancingState s -> ST s a) -> Balancing s a
+withB f = ask >>= lift . lift . f
 
+-- | Get an account's running balance so far. 
+getAmountB :: AccountName -> Balancing s MixedAmount
+getAmountB acc = withB $ \BalancingState{bsBalances} -> do 
+  fromMaybe 0 <$> H.lookup bsBalances acc
 
--- | Generalization used in the definition of
--- 'journalBalanceTransactionsST and 'journalCheckBalanceAssertions'
-journalBalanceTransactionsST ::
-  Bool
-  -> Journal
-  -> ST s txns
-  -- ^ creates transaction store
-  -> (txns -> Transaction -> ST s ())
-  -- ^ "store" operation
-  -> (txns -> ST s a)
-  -- ^ calculate result from transactions
-  -> ST s (Either String a)
-journalBalanceTransactionsST assrt j createStore storeIn extract =
-  runExceptT $ do
-    bals <- lift $ HT.newSized size
-    txStore <- lift $ createStore
-    flip R.runReaderT (Env bals (storeIn txStore) assrt $
-                       Just $ jinferredcommodities j) $ do
-      dated <- fmap snd . sortBy (comparing fst) . concat
-             <$> mapM discriminateByDate (jtxns j)
-      mapM checkInferAndRegisterAmounts dated
-    lift $ extract txStore
-  where size = genericLength $ journalPostings j
-
--- | This converts a transaction into a list of objects whose dates
--- have to be considered when checking balance assertions and handled
--- by 'checkInferAndRegisterAmounts'.
---
--- Transaction without balance assignments can be balanced and stored
--- immediately and their (possibly) dated postings are returned.
---
--- Transaction with balance assignments are only supported if no
--- posting has a 'pdate' value. Supported transactions will be
--- returned unchanged and balanced and stored later in 'checkInferAndRegisterAmounts'.
-discriminateByDate :: Transaction
-  -> CurrentBalancesModifier s [(Day, Either Posting Transaction)]
-discriminateByDate tx
-  | null (assignmentPostings tx) = do
-      styles <- R.reader $ eStyles
-      balanced <- lift $ ExceptT $ return
-        $ balanceTransaction styles tx
-      storeTransaction balanced
-      return $ fmap (postingDate &&& (Left . removePrices))
-        $ tpostings $ balanced
-  | True                         = do
-      when (any (isJust . pdate) $ tpostings tx) $
-        throwError $ unlines $
-        ["Not supported: Transactions with balance assignments "
-        ,"AND dated postings without amount:\n"
-        , showTransaction tx]
-      return [(tdate tx, Right
-                $ tx { tpostings = removePrices <$> tpostings tx })]
-
--- | This function takes different objects describing changes to
--- account balances on a single day. It can handle either a single
--- posting (from an already balanced transaction without assigments)
--- or a whole transaction with assignments (which is required to no
--- posting with pdate set.).
---
--- For a single posting, there is not much to do. Only add its amount
--- to its account and check the assertion, if there is one. This
--- functionality is provided by 'addAmountAndCheckBalance'.
---
--- For a whole transaction, it loops over all postings, and performs
--- 'addAmountAndCheckBalance', if there is an amount. If there is no
--- amount, the amount is inferred by the assertion or left empty if
--- there is no assertion. Then, the transaction is balanced, the
--- inferred amount added to the balance (all in
--- 'balanceTransactionUpdate') and the resulting transaction with no
--- missing amounts is stored in the array, for later retrieval.
---
--- Again in short:
---
--- 'Left Posting': Check the balance assertion and update the
---  account balance. If the amount is empty do nothing.  this can be
---  the case e.g. for virtual postings
---
--- 'Right Transaction': Loop over all postings, infer their amounts
--- and then balance and store the transaction.
-checkInferAndRegisterAmounts :: Either Posting Transaction
-                             -> CurrentBalancesModifier s ()
-checkInferAndRegisterAmounts (Left p) =
-  void $ addAmountAndCheckBalance return p
-checkInferAndRegisterAmounts (Right oldTx) = do
-  let ps = tpostings oldTx
-  styles <- R.reader $ eStyles
-  newPostings <- forM ps $ addAmountAndCheckBalance inferFromAssignment
-  storeTransaction =<< balanceTransactionUpdate
-    (fmap void . addToBalance) styles oldTx { tpostings = newPostings }
-  where
-    inferFromAssignment :: Posting -> CurrentBalancesModifier s Posting
-    inferFromAssignment p = maybe (return p)
-      (fmap (\a -> p { pamount = a }) . setBalance (paccount p))
-      $ pbalanceassertion p
-
--- | Adds a posting's amonut to the posting's account balance and
--- checks a possible balance assertion. If there is no amount, it runs
--- the supplied fallback action.
-addAmountAndCheckBalance :: (Posting -> CurrentBalancesModifier s Posting)
-            -- ^ action to execute, if posting has no amount
-            -> Posting
-            -> CurrentBalancesModifier s Posting
-addAmountAndCheckBalance _ p | hasAmount p = do
-  newAmt <- addToBalance (paccount p) $ pamount p
-  assrt <- R.reader eAssrt
-  lift $ when assrt $ ExceptT $ return
-    $ checkBalanceAssertion p newAmt
-  return p
-addAmountAndCheckBalance fallback p = fallback p
-
--- | Sets an account's balance to a given amount and returns the
--- difference of new and old amount
-setBalance :: AccountName -> Amount -> CurrentBalancesModifier s MixedAmount
-setBalance acc amt = liftModifier $ \Env{ eBalances = bals } -> do
-  old <- HT.lookup bals acc
-  let new = Mixed $ (amt :) $ maybe []
-        (filter ((/= acommodity amt) . acommodity) . amounts) old
-  HT.insert bals acc new
-  return $ maybe new (new -) old
-
--- | Adds an amount to an account's balance and returns the resulting
--- balance
-addToBalance :: AccountName -> MixedAmount -> CurrentBalancesModifier s MixedAmount
-addToBalance acc amt = liftModifier $ \Env{ eBalances = bals } -> do
-  new <- maybe amt (+ amt) <$> HT.lookup bals acc
-  HT.insert bals acc new
+-- | Add an amount to an account's running balance, and return the new running balance.
+addAmountB :: AccountName -> MixedAmount -> Balancing s MixedAmount
+addAmountB acc amt = withB $ \BalancingState{bsBalances} -> do
+  old <- fromMaybe 0 <$> H.lookup bsBalances acc
+  let new = old + amt
+  H.insert bsBalances acc new
   return new
 
--- | Stores a transaction in the transaction array in original parsing
--- order.
-storeTransaction :: Transaction -> CurrentBalancesModifier s ()
-storeTransaction tx = liftModifier $ ($tx) . eStoreTx
+-- | Set an account's running balance to this amount, and return the difference from the old. 
+setAmountB :: AccountName -> MixedAmount -> Balancing s MixedAmount
+setAmountB acc amt = withB $ \BalancingState{bsBalances} -> do
+  old <- fromMaybe 0 <$> H.lookup bsBalances acc
+  H.insert bsBalances acc amt
+  return $ amt - old
 
--- | Helper function
-liftModifier :: (Env s -> ST s a) -> CurrentBalancesModifier s a
-liftModifier f = R.ask >>= lift . lift . f
+-- | Update (overwrite) this transaction with a new one.
+storeTransactionB :: Transaction -> Balancing s ()
+storeTransactionB t = withB $ \BalancingState{bsTransactions}  ->
+  void $ writeArray bsTransactions (tindex t) t
 
+-- | Infer any missing amounts (to satisfy balance assignments and
+-- to balance transactions) and check that all transactions balance 
+-- and (optional) all balance assertions pass. Or return an error message
+-- (just the first error encountered).
+--
+-- Assumes journalInferCommodityStyles has been called, since those affect transaction balancing.
+--
+-- This does multiple things because amount inferring, balance assignments, 
+-- balance assertions and posting dates are interdependent.
+-- 
+-- This can be simplified further. Overview as of 20190219:
+-- @
+-- ****** parseAndFinaliseJournal['] (Cli/Utils.hs), journalAddForecast (Common.hs), budgetJournal (BudgetReport.hs), tests (BalanceReport.hs)
+-- ******* journalBalanceTransactions
+-- ******** runST
+-- ********* runExceptT
+-- ********** balanceTransaction (Transaction.hs)
+-- *********** balanceTransactionHelper
+-- ********** runReaderT
+-- *********** balanceTransactionAndCheckAssertionsB
+-- ************ addAmountAndCheckAssertionB
+-- ************ addOrAssignAmountAndCheckAssertionB
+-- ************ balanceTransactionHelper (Transaction.hs)
+-- ****** uiCheckBalanceAssertions d ui@UIState{aopts=UIOpts{cliopts_=copts}, ajournal=j} (ErrorScreen.hs)
+-- ******* journalCheckBalanceAssertions
+-- ******** journalBalanceTransactions
+-- ****** transactionWizard, postingsBalanced (Add.hs), tests (Transaction.hs)
+-- ******* balanceTransaction (Transaction.hs)  XXX hledger add won't allow balance assignments + missing amount ?
+-- @
+journalBalanceTransactions :: Bool -> Journal -> Either String Journal
+journalBalanceTransactions assrt j' =
+  let
+    -- ensure transactions are numbered, so we can store them by number 
+    j@Journal{jtxns=ts} = journalNumberTransactions j'
+    -- display precisions used in balanced checking
+    styles = Just $ journalCommodityStyles j
+    -- balance assignments will not be allowed on these
+    txnmodifieraccts = S.fromList $ map paccount $ concatMap tmpostingrules $ jtxnmodifiers j 
+  in 
+    runST $ do 
+      -- We'll update a mutable array of transactions as we balance them,
+      -- not strictly necessary but avoids a sort at the end I think.
+      balancedtxns <- newListArray (1, genericLength ts) ts
+
+      -- Infer missing posting amounts, check transactions are balanced, 
+      -- and check balance assertions. This is done in two passes:
+      runExceptT $ do
+
+        -- 1. Step through the transactions, balancing the ones which don't have balance assignments
+        -- and leaving the others for later. The balanced ones are split into their postings.
+        -- The postings and not-yet-balanced transactions remain in the same relative order.
+        psandts :: [Either Posting Transaction] <- fmap concat $ forM ts $ \case
+          t | null $ assignmentPostings t -> case balanceTransaction styles t of
+              Left  e  -> throwError e 
+              Right t' -> do
+                lift $ writeArray balancedtxns (tindex t') t'
+                return $ map Left $ tpostings t'
+          t -> return [Right t]
+
+        -- 2. Sort these items by date, preserving the order of same-day items,
+        -- and step through them while keeping running account balances, 
+        runningbals <- lift $ H.newSized (length $ journalAccountNamesUsed j)
+        flip runReaderT (BalancingState styles txnmodifieraccts assrt runningbals balancedtxns) $ do
+          -- performing balance assignments in, and balancing, the remaining transactions,
+          -- and checking balance assertions as each posting is processed.
+          void $ mapM' balanceTransactionAndCheckAssertionsB $ sortOn (either postingDate tdate) psandts
+
+        ts' <- lift $ getElems balancedtxns
+        return j{jtxns=ts'} 
+
+-- | This function is called statefully on each of a date-ordered sequence of 
+-- 1. fully explicit postings from already-balanced transactions and 
+-- 2. not-yet-balanced transactions containing balance assignments.
+-- It executes balance assignments and finishes balancing the transactions, 
+-- and checks balance assertions on each posting as it goes.
+-- An error will be thrown if a transaction can't be balanced 
+-- or if an illegal balance assignment is found (cf checkIllegalBalanceAssignment).
+-- Transaction prices are removed, which helps eg balance-assertions.test: 15. Mix different commodities and assignments.
+-- This stores the balanced transactions in case 2 but not in case 1.  
+balanceTransactionAndCheckAssertionsB :: Either Posting Transaction -> Balancing s ()
+
+balanceTransactionAndCheckAssertionsB (Left p@Posting{}) =
+  -- update the account's running balance and check the balance assertion if any
+  void $ addAmountAndCheckAssertionB $ removePrices p
+
+balanceTransactionAndCheckAssertionsB (Right t@Transaction{tpostings=ps}) = do
+  -- make sure we can handle the balance assignments
+  mapM_ checkIllegalBalanceAssignmentB ps
+  -- for each posting, infer its amount from the balance assignment if applicable, 
+  -- update the account's running balance and check the balance assertion if any
+  ps' <- forM ps $ \p -> pure (removePrices p) >>= addOrAssignAmountAndCheckAssertionB
+  -- infer any remaining missing amounts, and make sure the transaction is now fully balanced 
+  styles <- R.reader bsStyles
+  case balanceTransactionHelper styles t{tpostings=ps'} of
+    Left err -> throwError err 
+    Right (t', inferredacctsandamts) -> do
+      -- for each amount just inferred, update the running balance 
+      mapM_ (uncurry addAmountB) inferredacctsandamts
+      -- and save the balanced transaction.
+      storeTransactionB t' 
+
+-- | If this posting has an explicit amount, add it to the account's running balance.
+-- If it has a missing amount and a balance assignment, infer the amount from, and 
+-- reset the running balance to, the assigned balance.
+-- If it has a missing amount and no balance assignment, leave it for later.
+-- Then test the balance assertion if any.
+addOrAssignAmountAndCheckAssertionB :: Posting -> Balancing s Posting
+addOrAssignAmountAndCheckAssertionB p@Posting{paccount=acc, pamount=amt, pbalanceassertion=mba}
+  | hasAmount p = do
+      newbal <- addAmountB acc amt 
+      whenM (R.reader bsAssrt) $ checkBalanceAssertionB p newbal
+      return p
+  | Nothing <- mba = return p
+  | Just BalanceAssertion{baamount,batotal} <- mba = do
+      (diff,newbal) <- case batotal of
+        True  -> do
+          -- a total balance assignment
+          let newbal = Mixed [baamount]
+          diff <- setAmountB acc newbal
+          return (diff,newbal)
+        False -> do
+          -- a partial balance assignment
+          oldbalothercommodities <- filterMixedAmount ((acommodity baamount /=) . acommodity) <$> getAmountB acc
+          let assignedbalthiscommodity = Mixed [baamount] 
+              newbal = oldbalothercommodities + assignedbalthiscommodity   
+          diff <- setAmountB acc newbal
+          return (diff,newbal)
+      let p' = p{pamount=diff, poriginal=Just $ originalPosting p}
+      whenM (R.reader bsAssrt) $ checkBalanceAssertionB p' newbal
+      return p'
+
+-- | Add the posting's amount to its account's running balance, and
+-- optionally check the posting's balance assertion if any.
+-- The posting is expected to have an explicit amount (otherwise this does nothing).
+-- Adding and checking balance assertions are tightly paired because we
+-- need to see the balance as it stands after each individual posting. 
+addAmountAndCheckAssertionB :: Posting -> Balancing s Posting
+addAmountAndCheckAssertionB p | hasAmount p = do
+  newbal <- addAmountB (paccount p) (pamount p)
+  whenM (R.reader bsAssrt) $ checkBalanceAssertionB p newbal
+  return p
+addAmountAndCheckAssertionB p = return p
+
+-- | Check a posting's balance assertion against the given actual balance, and
+-- return an error if the assertion is not satisfied.
+-- If the assertion is partial, unasserted commodities in the actual balance
+-- are ignored; if it is total, they will cause the assertion to fail.
+checkBalanceAssertionB :: Posting -> MixedAmount -> Balancing s ()
+checkBalanceAssertionB p@Posting{pbalanceassertion=Just (BalanceAssertion{baamount,batotal})} actualbal =
+  forM_ assertedamts $ \amt -> checkBalanceAssertionOneCommodityB p amt actualbal
+  where
+    assertedamts = baamount : otheramts
+      where
+        assertedcomm = acommodity baamount
+        otheramts | batotal   = map (\a -> a{aquantity=0}) $ amounts $ filterMixedAmount ((/=assertedcomm).acommodity) actualbal
+                  | otherwise = []
+checkBalanceAssertionB _ _ = return ()
+
+-- | Does this (single commodity) expected balance match the amount of that
+-- commodity in the given (multicommodity) actual balance ? If not, returns a
+-- balance assertion failure message based on the provided posting.  To match,
+-- the amounts must be exactly equal (display precision is ignored here).
+-- If the assertion is inclusive, the expected amount is compared with the account's
+-- subaccount-inclusive balance; otherwise, with the subaccount-exclusive balance.
+checkBalanceAssertionOneCommodityB :: Posting -> Amount -> MixedAmount -> Balancing s ()
+checkBalanceAssertionOneCommodityB p@Posting{paccount=assertedacct} assertedamt actualbal = do
+  let isinclusive = maybe False bainclusive $ pbalanceassertion p
+  actualbal' <- 
+    if isinclusive 
+    then 
+      -- sum the running balances of this account and any of its subaccounts seen so far 
+      withB $ \BalancingState{bsBalances} -> 
+        H.foldM 
+          (\ibal (acc, amt) -> return $ ibal + 
+            if assertedacct==acc || assertedacct `isAccountNamePrefixOf` acc then amt else 0)
+          0 
+          bsBalances
+    else return actualbal  
+  let
+    assertedcomm    = acommodity assertedamt
+    actualbalincomm = headDef 0 $ amounts $ filterMixedAmountByCommodity assertedcomm $ actualbal'
+    pass =
+      aquantity
+        -- traceWith (("asserted:"++).showAmountDebug)
+        assertedamt ==
+      aquantity
+        -- traceWith (("actual:"++).showAmountDebug)
+        actualbalincomm
+
+    errmsg = printf (unlines
+                  [ "balance assertion: %s",
+                    "\nassertion details:",
+                    "date:       %s",
+                    "account:    %s%s",
+                    "commodity:  %s",
+                    -- "display precision:  %d",
+                    "calculated: %s", -- (at display precision: %s)",
+                    "asserted:   %s", -- (at display precision: %s)",
+                    "difference: %s"
+                  ])
+      (case ptransaction p of
+         Nothing -> "?" -- shouldn't happen
+         Just t ->  printf "%s\ntransaction:\n%s"
+                      (showGenericSourcePos pos)
+                      (chomp $ showTransaction t)
+                      :: String
+                      where
+                        pos = baposition $ fromJust $ pbalanceassertion p
+      )
+      (showDate $ postingDate p)
+      (T.unpack $ paccount p) -- XXX pack
+      (if isinclusive then " (and subs)" else "" :: String)
+      assertedcomm
+      -- (asprecision $ astyle actualbalincommodity)  -- should be the standard display precision I think
+      (show $ aquantity actualbalincomm)
+      -- (showAmount actualbalincommodity)
+      (show $ aquantity assertedamt)
+      -- (showAmount assertedamt)
+      (show $ aquantity assertedamt - aquantity actualbalincomm)
+
+  when (not pass) $ throwError errmsg
+
+-- | Throw an error if this posting is trying to do an illegal balance assignment.
+checkIllegalBalanceAssignmentB :: Posting -> Balancing s ()
+checkIllegalBalanceAssignmentB p = do 
+  checkBalanceAssignmentPostingDateB p
+  checkBalanceAssignmentUnassignableAccountB p
+  
+-- XXX these should show position. annotateErrorWithTransaction t ?
+
+-- | Throw an error if this posting is trying to do a balance assignment and
+-- has a custom posting date (which makes amount inference too hard/impossible).
+checkBalanceAssignmentPostingDateB :: Posting -> Balancing s ()
+checkBalanceAssignmentPostingDateB p =
+  when (hasBalanceAssignment p && isJust (pdate p)) $ 
+    throwError $ unlines $
+      ["postings which are balance assignments may not have a custom date."
+      ,"Please write the posting amount explicitly, or remove the posting date:"
+      ,""
+      ,maybe (unlines $ showPostingLines p) showTransaction $ ptransaction p
+      ]
+
+-- | Throw an error if this posting is trying to do a balance assignment and
+-- the account does not allow balance assignments (eg because it is referenced
+-- by a transaction modifier, which might generate additional postings to it).
+checkBalanceAssignmentUnassignableAccountB :: Posting -> Balancing s ()
+checkBalanceAssignmentUnassignableAccountB p = do
+  unassignable <- R.asks bsUnassignable
+  when (hasBalanceAssignment p && paccount p `S.member` unassignable) $
+    throwError $ unlines $
+      ["balance assignments cannot be used with accounts which are"
+      ,"posted to by transaction modifier rules (auto postings)."
+      ,"Please write the posting amount explicitly, or remove the rule."
+      ,""
+      ,"account: "++T.unpack (paccount p)
+      ,""
+      ,"transaction:"
+      ,""
+      ,maybe (unlines $ showPostingLines p) showTransaction $ ptransaction p
+      ]
+
+--
 
 -- | Choose and apply a consistent display format to the posting
 -- amounts in each commodity. Each commodity's format is specified by
@@ -711,56 +891,49 @@ journalApplyCommodityStyles :: Journal -> Journal
 journalApplyCommodityStyles j@Journal{jtxns=ts, jmarketprices=mps} = j''
     where
       j' = journalInferCommodityStyles j
+      styles = journalCommodityStyles j'
       j'' = j'{jtxns=map fixtransaction ts, jmarketprices=map fixmarketprice mps}
       fixtransaction t@Transaction{tpostings=ps} = t{tpostings=map fixposting ps}
-      fixposting p@Posting{pamount=a} = p{pamount=fixmixedamount a}
-      fixmarketprice mp@MarketPrice{mpamount=a} = mp{mpamount=fixamount a}
-      fixmixedamount (Mixed as) = Mixed $ map fixamount as
-      fixamount a@Amount{acommodity=c} = a{astyle=journalCommodityStyle j' c}
+      fixposting p@Posting{pamount=a} = p{pamount=styleMixedAmount styles a}
+      fixmarketprice mp@MarketPrice{mpamount=a} = mp{mpamount=styleAmount styles a}
 
--- | Get this journal's standard display style for the given
--- commodity.  That is the style defined by the last corresponding
--- commodity format directive if any, otherwise the style inferred
--- from the posting amounts (or in some cases, price amounts) in this
--- commodity if any, otherwise the default style.
-journalCommodityStyle :: Journal -> CommoditySymbol -> AmountStyle
-journalCommodityStyle j c =
-  headDef amountstyle{asprecision=2} $
-  catMaybes [
-     M.lookup c (jcommodities j) >>= cformat
-    ,M.lookup c $ jinferredcommodities j
-    ]
+-- | Get all the amount styles defined in this journal, either declared by 
+-- a commodity directive or inferred from amounts, as a map from symbol to style. 
+-- Styles declared by commodity directives take precedence, and these also are
+-- guaranteed to know their decimal point character.
+journalCommodityStyles :: Journal -> M.Map CommoditySymbol AmountStyle
+journalCommodityStyles j = declaredstyles <> inferredstyles
+  where
+    declaredstyles = M.mapMaybe cformat $ jcommodities j
+    inferredstyles = jinferredcommodities j
 
--- | Infer a display format for each commodity based on the amounts parsed.
--- "hledger... will use the format of the first posting amount in the
--- commodity, and the highest precision of all posting amounts in the commodity."
+-- | Collect and save inferred amount styles for each commodity based on
+-- the posting amounts in that commodity (excluding price amounts), ie:
+-- "the format of the first amount, adjusted to the highest precision of all amounts".
 journalInferCommodityStyles :: Journal -> Journal
 journalInferCommodityStyles j =
   j{jinferredcommodities =
-        commodityStylesFromAmounts $
-        dbg8 "journalChooseCommmodityStyles using amounts" $ journalAmounts j}
+    commodityStylesFromAmounts $
+    dbg8 "journalInferCommmodityStyles using amounts" $ journalAmounts j}
 
 -- | Given a list of amounts in parse order, build a map from their commodity names
 -- to standard commodity display formats.
 commodityStylesFromAmounts :: [Amount] -> M.Map CommoditySymbol AmountStyle
 commodityStylesFromAmounts amts = M.fromList commstyles
   where
-    samecomm = \a1 a2 -> acommodity a1 == acommodity a2
-    commamts = [(acommodity $ head as, as) | as <- groupBy samecomm $ sortBy (comparing acommodity) amts]
+    commamts = groupSort [(acommodity as, as) | as <- amts]
     commstyles = [(c, canonicalStyleFrom $ map astyle as) | (c,as) <- commamts]
 
 -- | Given an ordered list of amount styles, choose a canonical style.
--- That is: the style of the first, and the
--- maximum precision of all.
+-- That is: the style of the first, and the maximum precision of all.
 canonicalStyleFrom :: [AmountStyle] -> AmountStyle
 canonicalStyleFrom [] = amountstyle
-canonicalStyleFrom ss@(first:_) =
-  first{asprecision=prec, asdecimalpoint=mdec, asdigitgroups=mgrps}
+canonicalStyleFrom ss@(first:_) = first {asprecision = prec, asdecimalpoint = mdec, asdigitgroups = mgrps}
   where
-    mgrps = maybe Nothing Just $ headMay $ catMaybes $ map asdigitgroups ss
+    mgrps = headMay $ mapMaybe asdigitgroups ss
     -- precision is maximum of all precisions
-    prec = maximum $ map asprecision ss
-    mdec  = Just $ headDef '.' $ catMaybes $ map asdecimalpoint ss
+    prec = maximumStrict $ map asprecision ss
+    mdec = Just $ headDef '.' $ mapMaybe asdecimalpoint ss
     -- precision is that of first amount with a decimal point
     -- (mdec, prec) =
     --   case filter (isJust . asdecimalpoint) ss of
@@ -795,7 +968,8 @@ journalConvertAmountsToCost j@Journal{jtxns=ts} = j{jtxns=map fixtransaction ts}
       fixtransaction t@Transaction{tpostings=ps} = t{tpostings=map fixposting ps}
       fixposting p@Posting{pamount=a} = p{pamount=fixmixedamount a}
       fixmixedamount (Mixed as) = Mixed $ map fixamount as
-      fixamount = canonicaliseAmount (jinferredcommodities j) . costOfAmount
+      fixamount = styleAmount styles . costOfAmount
+      styles = journalCommodityStyles j
 
 -- -- | Get this journal's unique, display-preference-canonicalised commodities, by symbol.
 -- journalCanonicalCommodities :: Journal -> M.Map String CommoditySymbol
@@ -827,12 +1001,28 @@ journalConvertAmountsToCost j@Journal{jtxns=ts} = j{jtxns=map fixtransaction ts}
 -- Amounts in posting prices are not used for canonicalisation.
 --
 journalAmounts :: Journal -> [Amount]
-journalAmounts j =
-  concat
-   [map mpamount $ jmarketprices j
-   ,concatMap flatten $ map pamount $ journalPostings j
-   ]
-  where flatten (Mixed as) = as
+journalAmounts = getConst . traverseJournalAmounts (Const . (:[]))
+
+-- | Maps over all of the amounts in the journal
+overJournalAmounts :: (Amount -> Amount) -> Journal -> Journal
+overJournalAmounts f = runIdentity . traverseJournalAmounts (Identity . f)
+
+-- | Traverses over all ofthe amounts in the journal, in the order
+-- indicated by 'journalAmounts'.
+traverseJournalAmounts
+    :: Applicative f
+    => (Amount -> f Amount)
+    -> Journal -> f Journal
+traverseJournalAmounts f j =
+    recombine <$> (traverse . mpa) f (jmarketprices j)
+              <*> (traverse . tp . traverse . pamt . maa . traverse) f (jtxns j)
+  where
+    recombine mps txns = j { jmarketprices = mps, jtxns = txns }
+    -- a bunch of traversals
+    mpa  g mp = (\amt -> mp { mpamount  = amt }) <$> g (mpamount mp)
+    tp   g t  = (\ps  -> t  { tpostings = ps  }) <$> g (tpostings t)
+    pamt g p  = (\amt -> p  { pamount   = amt }) <$> g (pamount p)
+    maa  g (Mixed as) = Mixed <$> g as
 
 -- | The fully specified date span enclosing the dates (primary or secondary)
 -- of all this journal's transactions and postings, or DateSpan Nothing Nothing
@@ -842,27 +1032,38 @@ journalDateSpan secondary j
     | null ts   = DateSpan Nothing Nothing
     | otherwise = DateSpan (Just earliest) (Just $ addDays 1 latest)
     where
-      earliest = minimum dates
-      latest   = maximum dates
+      earliest = minimumStrict dates
+      latest   = maximumStrict dates
       dates    = pdates ++ tdates
       tdates   = map (if secondary then transactionDate2 else tdate) ts
-      pdates   = concatMap (catMaybes . map (if secondary then (Just . postingDate2) else pdate) . tpostings) ts
+      pdates   = concatMap (mapMaybe (if secondary then (Just . postingDate2) else pdate) . tpostings) ts
       ts       = jtxns j
 
--- #ifdef TESTS
-test_journalDateSpan = do
- "journalDateSpan" ~: do
-  assertEqual "" (DateSpan (Just $ fromGregorian 2014 1 10) (Just $ fromGregorian 2014 10 11))
-                 (journalDateSpan True j)
+-- | Apply the pivot transformation to all postings in a journal,
+-- replacing their account name by their value for the given field or tag.
+journalPivot :: Text -> Journal -> Journal
+journalPivot fieldortagname j = j{jtxns = map (transactionPivot fieldortagname) . jtxns $ j}
+
+-- | Replace this transaction's postings' account names with the value
+-- of the given field or tag, if any.
+transactionPivot :: Text -> Transaction -> Transaction         
+transactionPivot fieldortagname t = t{tpostings = map (postingPivot fieldortagname) . tpostings $ t}
+
+-- | Replace this posting's account name with the value
+-- of the given field or tag, if any, otherwise the empty string.
+postingPivot :: Text -> Posting -> Posting         
+postingPivot fieldortagname p = p{paccount = pivotedacct, poriginal = Just $ originalPosting p}
   where
-    j = nulljournal{jtxns = [nulltransaction{tdate = parsedate "2014/02/01"
-                                            ,tpostings = [posting{pdate=Just (parsedate "2014/01/10")}]
-                                            }
-                            ,nulltransaction{tdate = parsedate "2014/09/01"
-                                            ,tpostings = [posting{pdate2=Just (parsedate "2014/10/10")}]
-                                            }
-                            ]}
--- #endif
+    pivotedacct
+      | Just t <- ptransaction p, fieldortagname == "code"        = tcode t  
+      | Just t <- ptransaction p, fieldortagname == "description" = tdescription t  
+      | Just t <- ptransaction p, fieldortagname == "payee"       = transactionPayee t  
+      | Just t <- ptransaction p, fieldortagname == "note"        = transactionNote t  
+      | Just (_, value) <- postingFindTag fieldortagname p        = value
+      | otherwise                                                 = ""
+
+postingFindTag :: TagName -> Posting -> Maybe (TagName, TagValue)         
+postingFindTag tagname p = find ((tagname==) . fst) $ postingAllTags p
 
 -- Misc helpers
 
@@ -889,7 +1090,7 @@ abspat pat = if isnegativepat pat then drop (length negateprefix) pat else pat
 
 -- tests
 
--- A sample journal for testing, similar to data/sample.journal:
+-- A sample journal for testing, similar to examples/sample.journal:
 --
 -- 2008/01/01 income
 --     assets:bank:checking  $1
@@ -908,6 +1109,10 @@ abspat pat = if isnegativepat pat then drop (length negateprefix) pat else pat
 --     expenses:supplies  $1
 --     assets:cash
 --
+-- 2008/10/01 take a loan
+--     assets:bank:checking $1
+--     liabilities:debts    $-1
+--
 -- 2008/12/31 * pay off
 --     liabilities:debts  $1
 --     assets:bank:checking
@@ -920,7 +1125,7 @@ Right samplejournal = journalBalanceTransactions False $
              tsourcepos=nullsourcepos,
              tdate=parsedate "2008/01/01",
              tdate2=Nothing,
-             tstatus=Uncleared,
+             tstatus=Unmarked,
              tcode="",
              tdescription="income",
              tcomment="",
@@ -929,7 +1134,7 @@ Right samplejournal = journalBalanceTransactions False $
                  ["assets:bank:checking" `post` usd 1
                  ,"income:salary" `post` missingamt
                  ],
-             tpreceding_comment_lines=""
+             tprecedingcomment=""
            }
           ,
            txnTieKnot $ Transaction {
@@ -937,7 +1142,7 @@ Right samplejournal = journalBalanceTransactions False $
              tsourcepos=nullsourcepos,
              tdate=parsedate "2008/06/01",
              tdate2=Nothing,
-             tstatus=Uncleared,
+             tstatus=Unmarked,
              tcode="",
              tdescription="gift",
              tcomment="",
@@ -946,7 +1151,7 @@ Right samplejournal = journalBalanceTransactions False $
                  ["assets:bank:checking" `post` usd 1
                  ,"income:gifts" `post` missingamt
                  ],
-             tpreceding_comment_lines=""
+             tprecedingcomment=""
            }
           ,
            txnTieKnot $ Transaction {
@@ -954,7 +1159,7 @@ Right samplejournal = journalBalanceTransactions False $
              tsourcepos=nullsourcepos,
              tdate=parsedate "2008/06/02",
              tdate2=Nothing,
-             tstatus=Uncleared,
+             tstatus=Unmarked,
              tcode="",
              tdescription="save",
              tcomment="",
@@ -963,7 +1168,7 @@ Right samplejournal = journalBalanceTransactions False $
                  ["assets:bank:saving" `post` usd 1
                  ,"assets:bank:checking" `post` usd (-1)
                  ],
-             tpreceding_comment_lines=""
+             tprecedingcomment=""
            }
           ,
            txnTieKnot $ Transaction {
@@ -980,7 +1185,23 @@ Right samplejournal = journalBalanceTransactions False $
                        ,"expenses:supplies" `post` usd 1
                        ,"assets:cash" `post` missingamt
                        ],
-             tpreceding_comment_lines=""
+             tprecedingcomment=""
+           }
+          ,
+           txnTieKnot $ Transaction {
+             tindex=0,
+             tsourcepos=nullsourcepos,
+             tdate=parsedate "2008/10/01",
+             tdate2=Nothing,
+             tstatus=Unmarked,
+             tcode="",
+             tdescription="take a loan",
+             tcomment="",
+             ttags=[],
+             tpostings=["assets:bank:checking" `post` usd 1
+                       ,"liabilities:debts" `post` usd (-1)
+                       ],
+             tprecedingcomment=""
            }
           ,
            txnTieKnot $ Transaction {
@@ -988,7 +1209,7 @@ Right samplejournal = journalBalanceTransactions False $
              tsourcepos=nullsourcepos,
              tdate=parsedate "2008/12/31",
              tdate2=Nothing,
-             tstatus=Uncleared,
+             tstatus=Unmarked,
              tcode="",
              tdescription="pay off",
              tcomment="",
@@ -996,17 +1217,92 @@ Right samplejournal = journalBalanceTransactions False $
              tpostings=["liabilities:debts" `post` usd 1
                        ,"assets:bank:checking" `post` usd (-1)
                        ],
-             tpreceding_comment_lines=""
+             tprecedingcomment=""
            }
           ]
          }
 
-tests_Hledger_Data_Journal = TestList $
- [
-  test_journalDateSpan
-  -- "query standard account types" ~:
-  --  do
-  --   let j = journal1
-  --   journalBalanceSheetAccountNames j `is` ["assets","assets:a","equity","equity:q","equity:q:qq","liabilities","liabilities:l"]
-  --   journalProfitAndLossAccountNames j `is` ["expenses","expenses:e","income","income:i"]
- ]
+tests_Journal = tests "Journal" [
+
+   test "journalDateSpan" $
+    journalDateSpan True nulljournal{
+      jtxns = [nulltransaction{tdate = parsedate "2014/02/01"
+                              ,tpostings = [posting{pdate=Just (parsedate "2014/01/10")}]
+                              }
+              ,nulltransaction{tdate = parsedate "2014/09/01"
+                              ,tpostings = [posting{pdate2=Just (parsedate "2014/10/10")}]
+                              }
+              ]
+      }
+    `is` (DateSpan (Just $ fromGregorian 2014 1 10) (Just $ fromGregorian 2014 10 11))
+
+  ,tests "standard account type queries" $
+    let
+      j = samplejournal
+      journalAccountNamesMatching :: Query -> Journal -> [AccountName]
+      journalAccountNamesMatching q = filter (q `matchesAccount`) . journalAccountNames
+      namesfrom qfunc = journalAccountNamesMatching (qfunc j) j
+    in [
+       test "assets"      $ expectEq (namesfrom journalAssetAccountQuery)     ["assets","assets:bank","assets:bank:checking","assets:bank:saving","assets:cash"]
+      ,test "liabilities" $ expectEq (namesfrom journalLiabilityAccountQuery) ["liabilities","liabilities:debts"]
+      ,test "equity"      $ expectEq (namesfrom journalEquityAccountQuery)    []
+      ,test "income"      $ expectEq (namesfrom journalRevenueAccountQuery)    ["income","income:gifts","income:salary"]
+      ,test "expenses"    $ expectEq (namesfrom journalExpenseAccountQuery)   ["expenses","expenses:food","expenses:supplies"]
+    ]
+
+  ,tests "journalBalanceTransactions" [
+
+     test "balance-assignment" $ do
+      let ej = journalBalanceTransactions True $
+            --2019/01/01
+            --  (a)            = 1
+            nulljournal{ jtxns = [
+              transaction "2019/01/01" [ vpost' "a" missingamt (balassert (num 1)) ]
+            ]}
+      expectRight ej
+      let Right j = ej
+      (jtxns j & head & tpostings & head & pamount) `is` Mixed [num 1]
+
+    ,test "same-day-1" $ do
+      expectRight $ journalBalanceTransactions True $
+            --2019/01/01
+            --  (a)            = 1
+            --2019/01/01
+            --  (a)          1 = 2
+            nulljournal{ jtxns = [
+               transaction "2019/01/01" [ vpost' "a" missingamt (balassert (num 1)) ]
+              ,transaction "2019/01/01" [ vpost' "a" (num 1)    (balassert (num 2)) ]
+            ]}
+
+    ,test "same-day-2" $ do
+      expectRight $ journalBalanceTransactions True $
+            --2019/01/01
+            --    (a)                  2 = 2
+            --2019/01/01
+            --    b                    1
+            --    a
+            --2019/01/01
+            --    a                    0 = 1
+            nulljournal{ jtxns = [
+               transaction "2019/01/01" [ vpost' "a" (num 2)    (balassert (num 2)) ]
+              ,transaction "2019/01/01" [
+                 post' "b" (num 1)     Nothing  
+                ,post' "a"  missingamt Nothing  
+              ]
+              ,transaction "2019/01/01" [ post' "a" (num 0)     (balassert (num 1)) ]
+            ]}
+
+    ,test "out-of-order" $ do
+      expectRight $ journalBalanceTransactions True $
+            --2019/1/2
+            --  (a)    1 = 2
+            --2019/1/1
+            --  (a)    1 = 1
+            nulljournal{ jtxns = [
+               transaction "2019/01/02" [ vpost' "a" (num 1)    (balassert (num 2)) ]
+              ,transaction "2019/01/01" [ vpost' "a" (num 1)    (balassert (num 1)) ]
+            ]}
+
+    ]
+
+  ]

@@ -5,7 +5,7 @@ hledger -f- print
 2010/31/12 x
    a  1
    b
->>>2 /bad date/
+>>>2 /invalid date/
 >>>= 1
 # 2. too-large day
 hledger -f- print
@@ -13,7 +13,7 @@ hledger -f- print
 2010/12/32 x
    a  1
    b
->>>2 /bad date/
+>>>2 /invalid date/
 >>>= 1
 # 3. 29th feb on leap year should be ok
 hledger -f- print
@@ -23,8 +23,8 @@ hledger -f- print
    b
 >>>
 2000/02/29 x
-    a             1
-    b            -1
+    a               1
+    b
 
 >>>= 0
 # 4. 29th feb on non-leap year should fail
@@ -33,7 +33,7 @@ hledger -f- print
 2001/2/29 x
    a  1
    b
->>>2 /bad date/
+>>>2 /invalid date/
 >>>= 1
 # 5. dates must be followed by whitespace or newline
 hledger -f- print

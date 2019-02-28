@@ -1,0 +1,176 @@
+
+# 1. Simple case
+hledger close -f- -p 2016 assets liabilities
+<<<
+2016/1/1 open
+    assets:bank         $100
+    assets:cash         $20
+    equity:opening
+
+2016/1/15 spend
+    expenses:sweets     $5
+    assets:cash
+
+2016/1/19 withdraw
+    assets:cash         $20
+    assets:bank
+
+2016/1/20 lend
+    liabilities         $25
+    assets:cash
+>>>
+2016/12/31 closing balances
+    assets:bank                        $-80 = $0
+    assets:cash                        $-10 = $0
+    liabilities                        $-25 = $0
+    equity:closing balances
+
+2017/01/01 opening balances
+    assets:bank                         $80 = $80
+    assets:cash                         $10 = $10
+    liabilities                         $25 = $25
+    equity:opening balances
+
+>>>=0
+
+# 2. Test aggregation of postings with prices
+hledger close -f- -p 2016 assets liabilities
+<<<
+Y2016
+01/31
+	liabilities:employer  $5,000.00
+	income:salary
+
+02/05
+	liabilities:employer  -$5,000.00 @ 0.95 EUR
+	expenses:tax  1,852.50 EUR
+	assets:bank  2,897.00 EUR
+	liabilities:employer
+
+02/29
+	liabilities:employer  $5,000.00
+	income:salary
+
+03/04
+	liabilities:employer  -$5,000.0 @ 0.93 EUR
+	expenses:tax  1,813.50 EUR
+	assets:bank  2,836.00 EUR
+	liabilities:employer
+>>>
+2016/12/31 closing balances
+    assets:bank                  -5,733 EUR = 0 EUR
+    liabilities:employer             -1 EUR = 0 EUR
+    equity:closing balances
+
+2017/01/01 opening balances
+    assets:bank                    5,733 EUR = 5,733 EUR
+    liabilities:employer               1 EUR = 1 EUR
+    equity:opening balances
+
+>>>=0
+
+# 3. A begin date should be ignored
+hledger close -f- -b2017/6/1 -e2018
+<<<
+2017/1/1
+    (a)   1
+>>>
+2017/12/31 closing balances
+    a                                    -1 = 0
+    equity:closing balances
+
+2018/01/01 opening balances
+    a                                     1 = 1
+    equity:opening balances
+
+>>>=0
+
+# 4. Print just the opening transaction
+hledger close -f- -p 2016 assets liabilities --opening
+<<<
+2016/1/1 open
+    assets:bank         $100
+    assets:cash         $20
+    equity:opening
+
+2016/1/15 spend
+    expenses:sweets     $5
+    assets:cash
+
+2016/1/19 withdraw
+    assets:cash         $20
+    assets:bank
+
+2016/1/20 lend
+    liabilities         $25
+    assets:cash
+>>>
+2017/01/01 opening balances
+    assets:bank                         $80 = $80
+    assets:cash                         $10 = $10
+    liabilities                         $25 = $25
+    equity:opening balances
+
+>>>=0
+
+# 5. Print just the closing transaction
+hledger close -f- -p 2016 assets liabilities --closing
+<<<
+2016/1/1 open
+    assets:bank         $100
+    assets:cash         $20
+    equity:opening
+
+2016/1/15 spend
+    expenses:sweets     $5
+    assets:cash
+
+2016/1/19 withdraw
+    assets:cash         $20
+    assets:bank
+
+2016/1/20 lend
+    liabilities         $25
+    assets:cash
+>>>
+2016/12/31 closing balances
+    assets:bank                        $-80 = $0
+    assets:cash                        $-10 = $0
+    liabilities                        $-25 = $0
+    equity:closing balances
+
+>>>=0
+
+# 6. Supplying --opening --closing is the same as just "close"
+hledger close -f- -p 2016 assets liabilities --opening --closing
+<<<
+2016/1/1 open
+    assets:bank         $100
+    assets:cash         $20
+    equity:opening
+
+2016/1/15 spend
+    expenses:sweets     $5
+    assets:cash
+
+2016/1/19 withdraw
+    assets:cash         $20
+    assets:bank
+
+2016/1/20 lend
+    liabilities         $25
+    assets:cash
+>>>
+2016/12/31 closing balances
+    assets:bank                        $-80 = $0
+    assets:cash                        $-10 = $0
+    liabilities                        $-25 = $0
+    equity:closing balances
+
+2017/01/01 opening balances
+    assets:bank                         $80 = $80
+    assets:cash                         $10 = $10
+    liabilities                         $25 = $25
+    equity:opening balances
+
+>>>=0

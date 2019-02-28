@@ -1,6 +1,7 @@
 -- The transaction screen, showing a single transaction's general journal entry.
 
 {-# LANGUAGE OverloadedStrings, TupleSections, RecordWildCards #-} -- , FlexibleContexts
+{-# LANGUAGE CPP #-}
 
 module Hledger.UI.TransactionScreen
  (transactionScreen
@@ -11,16 +12,17 @@ where
 import Control.Monad
 import Control.Monad.IO.Class (liftIO)
 import Data.List
+#if !(MIN_VERSION_base(4,11,0))
 import Data.Monoid
+#endif
 import qualified Data.Text as T
 import Data.Time.Calendar (Day)
-import Graphics.Vty (Event(..),Key(..))
+import Graphics.Vty (Event(..),Key(..),Modifier(..))
 import Brick
 import Brick.Widgets.List (listMoveTo)
-import Brick.Widgets.Border (borderAttr)
 
 import Hledger
-import Hledger.Cli hiding (progname,prognameandversion,green)
+import Hledger.Cli hiding (progname,prognameandversion)
 import Hledger.UI.UIOptions
 -- import Hledger.UI.Theme
 import Hledger.UI.UITypes
@@ -47,13 +49,14 @@ tsInit _ _ _ = error "init function called with wrong screen type, should not ha
 
 tsDraw :: UIState -> [Widget Name]
 tsDraw UIState{aopts=UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}}
-                              ,aScreen=TransactionScreen{
-                                   tsTransaction=(i,t)
-                                  ,tsTransactions=nts
-                                  ,tsAccount=acct}
-                              ,aMode=mode} =
+              ,aScreen=TransactionScreen{tsTransaction=(i,t)
+                                        ,tsTransactions=nts
+                                        ,tsAccount=acct
+                                        }
+              ,aMode=mode
+              } =
   case mode of
-    Help       -> [helpDialog, maincontent]
+    Help       -> [helpDialog copts, maincontent]
     -- Minibuffer e -> [minibuffer e, maincontent]
     _          -> [maincontent]
   where
@@ -74,16 +77,16 @@ tsDraw UIState{aopts=UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}}
           <+> togglefilters
           <+> borderQueryStr (query_ ropts)
           <+> str (" in "++T.unpack (replaceHiddenAccountsNameWith "All" acct)++")")
-          <+> (if ignore_assertions_ copts then withAttr (borderAttr <> "query") (str " ignoring balance assertions") else str "")
+          <+> (if ignore_assertions_ $ inputopts_ copts then withAttr ("border" <> "query") (str " ignoring balance assertions") else str "")
           where
             togglefilters =
               case concat [
-                   uiShowClearedStatus $ clearedstatus_ ropts
+                   uiShowStatus copts $ statuses_ ropts
                   ,if real_ ropts then ["real"] else []
                   ,if empty_ ropts then [] else ["nonzero"]
                   ] of
                 [] -> str ""
-                fs -> withAttr (borderAttr <> "query") (str $ " " ++ intercalate ", " fs)
+                fs -> withAttr ("border" <> "query") (str $ " " ++ intercalate ", " fs)
 
         bottomlabel = case mode of
                         -- Minibuffer ed -> minibuffer ed
@@ -91,8 +94,8 @@ tsDraw UIState{aopts=UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}}
           where
             quickhelp = borderKeysStr [
                ("?", "help")
-              ,("left", "back")
-              ,("up/down", "prev/next")
+              ,("LEFT", "back")
+              ,("UP/DOWN", "prev/next")
               --,("ESC", "cancel/top")
               -- ,("a", "add")
               ,("E", "editor")
@@ -104,17 +107,20 @@ tsDraw _ = error "draw function called with wrong screen type, should not happen
 
 tsHandle :: UIState -> BrickEvent Name AppEvent -> EventM Name (Next UIState)
 tsHandle ui@UIState{aScreen=s@TransactionScreen{tsTransaction=(i,t)
-                                                ,tsTransactions=nts
-                                                ,tsAccount=acct}
-                    ,aopts=UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}}
-                    ,ajournal=j
-                    ,aMode=mode
-                    }
+                                               ,tsTransactions=nts
+                                               ,tsAccount=acct
+                                               }
+                   ,aopts=UIOpts{cliopts_=copts@CliOpts{reportopts_=ropts}}
+                   ,ajournal=j
+                   ,aMode=mode
+                   }
          ev =
   case mode of
     Help ->
       case ev of
         VtyEvent (EvKey (KChar 'q') []) -> halt ui
+        VtyEvent (EvKey (KChar 'l') [MCtrl]) -> redraw ui
+        VtyEvent (EvKey (KChar 'z') [MCtrl]) -> suspend ui
         _                    -> helpHandle ui ev
 
     _ -> do
@@ -128,7 +134,9 @@ tsHandle ui@UIState{aScreen=s@TransactionScreen{tsTransaction=(i,t)
         VtyEvent (EvKey (KChar c)   []) | c `elem` ['?'] -> continue $ setMode Help ui
         VtyEvent (EvKey (KChar 'E') []) -> suspendAndResume $ void (runEditor pos f) >> uiReloadJournalIfChanged copts d j ui
           where
-            (pos,f) = let GenericSourcePos f l c = tsourcepos t in (Just (l, Just c),f)
+            (pos,f) = case tsourcepos t of
+                        GenericSourcePos f l c    -> (Just (l, Just c),f)
+                        JournalSourcePos f (l1,_) -> (Just (l1, Nothing),f) 
         AppEvent (DateChange old _) | isStandardPeriod p && p `periodContainsDate` old ->
           continue $ regenerateScreens j d $ setReportPeriod (DayPeriod d) ui
           where
@@ -166,12 +174,14 @@ tsHandle ui@UIState{aScreen=s@TransactionScreen{tsTransaction=(i,t)
         -- EvKey (KChar 'E') [] -> continue $ regenerateScreens j d $ stToggleEmpty ui
         -- EvKey (KChar 'C') [] -> continue $ regenerateScreens j d $ stToggleCleared ui
         -- EvKey (KChar 'R') [] -> continue $ regenerateScreens j d $ stToggleReal ui
-        VtyEvent (EvKey k           []) | k `elem` [KUp, KChar 'k']   -> continue $ regenerateScreens j d ui{aScreen=s{tsTransaction=(iprev,tprev)}}
-        VtyEvent (EvKey k           []) | k `elem` [KDown, KChar 'j'] -> continue $ regenerateScreens j d ui{aScreen=s{tsTransaction=(inext,tnext)}}
-        VtyEvent (EvKey k           []) | k `elem` [KLeft, KChar 'h'] -> continue ui''
+        VtyEvent e | e `elem` moveUpEvents   -> continue $ regenerateScreens j d ui{aScreen=s{tsTransaction=(iprev,tprev)}}
+        VtyEvent e | e `elem` moveDownEvents -> continue $ regenerateScreens j d ui{aScreen=s{tsTransaction=(inext,tnext)}}
+        VtyEvent e | e `elem` moveLeftEvents -> continue ui''
           where
             ui'@UIState{aScreen=scr} = popScreen ui
             ui'' = ui'{aScreen=rsSelect (fromIntegral i) scr}
+        VtyEvent (EvKey (KChar 'l') [MCtrl]) -> redraw ui
+        VtyEvent (EvKey (KChar 'z') [MCtrl]) -> suspend ui
         _ -> continue ui
 
 tsHandle _ _ = error "event handler called with wrong screen type, should not happen"

@@ -1,4 +1,4 @@
-{-# LANGUAGE RecordWildCards, DeriveDataTypeable, FlexibleInstances #-}
+{-# LANGUAGE OverloadedStrings, RecordWildCards, DeriveDataTypeable, FlexibleInstances #-}
 {-|
 
 Generate several common kinds of report from a journal, as \"*Report\" -
@@ -10,34 +10,36 @@ javascript, or whatever.
 
 module Hledger.Reports (
   module Hledger.Reports.ReportOptions,
+  module Hledger.Reports.ReportTypes,
   module Hledger.Reports.EntriesReport,
   module Hledger.Reports.PostingsReport,
   module Hledger.Reports.TransactionsReports,
   module Hledger.Reports.BalanceReport,
   module Hledger.Reports.MultiBalanceReports,
+  module Hledger.Reports.BudgetReport,
 --   module Hledger.Reports.BalanceHistoryReport,
-
   -- * Tests
-  tests_Hledger_Reports
+  tests_Reports
 )
 where
 
-import Test.HUnit
-
 import Hledger.Reports.ReportOptions
+import Hledger.Reports.ReportTypes
 import Hledger.Reports.EntriesReport
 import Hledger.Reports.PostingsReport
 import Hledger.Reports.TransactionsReports
 import Hledger.Reports.BalanceReport
 import Hledger.Reports.MultiBalanceReports
+import Hledger.Reports.BudgetReport
 -- import Hledger.Reports.BalanceHistoryReport
+import Hledger.Utils.Test
 
-tests_Hledger_Reports :: Test
-tests_Hledger_Reports = TestList $
- -- ++ tests_isInterestingIndented
- [
- tests_Hledger_Reports_ReportOptions,
- tests_Hledger_Reports_EntriesReport,
- tests_Hledger_Reports_PostingsReport,
- tests_Hledger_Reports_BalanceReport
- ]
+tests_Reports = tests "Reports" [
+   tests_BalanceReport
+  ,tests_BudgetReport
+  ,tests_EntriesReport
+  ,tests_MultiBalanceReports
+  ,tests_PostingsReport
+  ,tests_ReportOptions
+  ,tests_TransactionsReports
+  ]

@@ -5,8 +5,19 @@
 h4 { margin-top:2em; }
 </style>
 <nav id="toc">
-<p>Major releases:</p>
 <ol>
+<li><a href="#hledger-install">hledger-install</a>
+<!-- <li><a href="#latest-minor-release">Latest (2018/4/30)</a> -->
+<li><a href="#hledger-1.13">hledger 1.13 (2019/02/01)</a>
+<li><a href="#hledger-1.12">hledger 1.12 (2018/12/02)</a>
+<li><a href="#hledger-1.11">hledger 1.11 (2018/9/30)</a>
+<li><a href="#hledger-1.10">hledger 1.10 (2018/6/30)</a>
+<li><a href="#hledger-1.9">hledger 1.9 (2018/3/31)</a>
+<li><a href="#hledger-1.5">hledger 1.5 (2017/12/31)</a>
+<li><a href="#hledger-1.4">hledger 1.4 (2017/9/30)</a>
+<li><a href="#hledger-1.3">hledger 1.3 (2017/6/30)</a>
+<li><a href="#hledger-1.2">hledger 1.2 (2017/3/31)</a>
+<li><a href="#hledger-1.1">hledger 1.1 (2016/12/31)</a>
 <li><a href="#hledger-1.0">hledger 1.0 (2016/10/26)</a>
 <li><a href="#hledger-0.27">hledger 0.27 (2015/10/30)</a>
 <li><a href="#hledger-0.26">hledger 0.26 (2015/7/12)</a>
@@ -40,16 +51,1797 @@ h4 { margin-top:2em; }
 
 # Release notes
 
-<!--
-Based on the 
-[hledger](http://hackage.haskell.org/package/hledger/changelog),
-[hledger-ui](http://hackage.haskell.org/package/hledger-ui/changelog),
-[hledger-web](http://hackage.haskell.org/package/hledger-web/changelog),
-[hledger-api](http://hackage.haskell.org/package/hledger-web/changelog),
-[hledger-lib](http://hackage.haskell.org/package/hledger-lib/changelog) &
-[hledger project](https://github.com/simonmichael/hledger/blob/master/doc/CHANGES)
-change logs.
--->
+
+### hledger-install
+
+The [hledger installer](download.html#b1.-with-hledger-install)
+is updated as needed; here are the
+[latest changes](https://github.com/simonmichael/hledger/commits/master/hledger-install/hledger-install.sh).
+
+
+
+
+## Latest minor release
+
+<http://hackage.haskell.org/package/hledger-lib-1.13.1/changelog>  
+<http://hackage.haskell.org/package/hledger-1.13.2/changelog>  
+<http://hackage.haskell.org/package/hledger-ui-1.13.1/changelog>  
+<!-- <http://hackage.haskell.org/package/hledger-web-1.13.1/changelog>   -->
+<!-- <http://hackage.haskell.org/package/hledger-api-1.13.1/changelog>   -->
+
+
+## 2019/02/01 hledger 1.13
+
+***Unified command CLI help/manuals, bash completions, docker support,
+improved budget report, --transpose, new account types syntax, 
+usability & bug fixes.
+***
+([announcement](https://groups.google.com/d/topic/hledger/ffkwwkcHmmU/discussion))
+
+  [project](#project-wide-changes-for-1.13)
+| [hledger](#hledger-1.13-1)
+| [hledger-ui](#hledger-ui-1.13)
+| [hledger-web](#hledger-web-1.13)
+| [hledger-api](#hledger-api-1.13)
+| [hledger-lib](#hledger-lib-1.13)
+| [credits](#credits-1.13)
+
+### project-wide changes for 1.13
+
+- packaging: A docker image providing the main hledger tools is now
+  linked on the download page. This is another way to get up-to-date
+  hledger tools without building them yourself (and, a way to run
+  hledger-ui on windows ?) (Dmitry Astapov, Simon Michael)
+
+- doc: fixed pandoc typography conversion in web manuals. Eg `--` was
+  being rendered as en-dash. ([#954](https://github.com/simonmichael/hledger/issues/954)).
+
+Developers:
+
+- developer docs have moved from the wiki into CONTRIBUTING.md ([#920](https://github.com/simonmichael/hledger/issues/920))
+
+- new streamlined changelog update process. Shake targets:
+  
+      ./Shake changelogs
+      ./Shake CHANGES.md
+      ./Shake CHANGES.md-dry
+      ./Shake PKG/CHANGES.md
+      ./Shake PKG/CHANGES.md-dry
+
+  update the project-wide and/or package changelogs, inserting new
+  commits (touching the respective directory, since the tag version or
+  commit hash which is the first word in the changelog's previous top
+  heading) at the top, formatted as changelog entries.
+
+- ./Shake PKG - builds a package plus its embedded docs.
+  ./Shake build - builds all the packages and their embedded docs.
+  ("stack build PKG" does not notice changes in embedded doc files.)
+
+- make ghci-shake - loads Shake.hs in ghci
+
+- make tags - includes doc source files, hpack/cabal files, Shake.hs
+
+- make site-livereload - opens a reloading browser view on the website html
+  (requires `livereloadx`)
+
+- added a Dockerfile and helper scripts (Dmitry Astapov)
+  
+- doc files and hpack/cabal files are included in TAGS again
+
+### hledger 1.13
+
+- cli: reorganised commands list. Addons now have a + prefix.
+
+- cli: the command line help and manual section for all hledger's
+  commands are now consistent, and generated from the same source.
+
+- cli: comprehensive bash completion support is now provided (in
+  shell-completion/). See how-to in the Cookbook. (Jakob Schöttl)
+
+- balance --budget: budget amounts now aggregate hierarchically, like
+  account balances. Unbudgeted accounts can be shown with -E/--empty
+  (along with zero-balance accounts), and the --show-budgeted flag has
+  been dropped.  (Dmitry Astapov)
+
+- balance: new --transpose flag switches the rows and columns of
+  tabular balance reports (in txt and csv output formats). (Dmitry
+  Astapov)
+
+- close: generated balance assertions now have exact amounts with all
+  decimal digits, ignoring display precision. Also, balance assertion
+  amounts will no longer contain prices.
+  ([#941](https://github.com/simonmichael/hledger/issues/941),
+  [#824](https://github.com/simonmichael/hledger/issues/824),
+  [#958](https://github.com/simonmichael/hledger/issues/958))
+
+- files: now shows up in the commands list
+
+- import: be silent when there's nothing to import
+
+- roi: percentages smaller than 0.01% are displayed as zero (Dmitry
+  Astapov)
+
+- stats, ui: correct file order is preserved when using --auto
+  ([#949](https://github.com/simonmichael/hledger/issues/949))
+
+- journal: account directive: the account name can now be followed by
+  a comment on the same line
+
+- journal: account directive: account types for the bs/bse/cf/is
+  commands can now be set with a `type:` tag, whose value is `Asset`,
+  `Liability`, `Equity`, `Revenue`, `Expense`, `A`, `L`, `E`, `R` or
+  `X` (case-insensitive).  The previous syntax (`account assets A`) is
+  now deprecated.
+
+- journal: account directive: account sort codes like `account 1000`
+  (introduced in 1.9, deprecated in 1.11) are no longer supported.
+
+- journal: transaction modifiers (auto postings) can affect periodic
+  transactions (--auto can add postings to transactions generated with
+  --forecast). (Dmitry Astapov)
+
+- journal: balance assertion errors now show exact amounts with all
+  decimal digits.  Previously it was possible, in case of a commodity
+  directive limiting the display precision, to have a balance
+  assertion error with asserted and actual amounts looking the
+  same. ([#941](https://github.com/simonmichael/hledger/issues/941))
+
+- journal: fixed a periodic transaction parsing failure
+  ([#942](https://github.com/simonmichael/hledger/issues/942)) (Dmitry
+  Astapov)
+
+### hledger-ui 1.13
+
+- on posix systems, control-z suspends the program
+
+- control-l now works everywhere and redraws more reliably
+
+- the top status info is clearer
+
+- use hledger 1.13
+
+### hledger-web 1.13
+
+- use hledger 1.13
+
+### hledger-api 1.13
+
+- use hledger 1.13
+
+### hledger-lib 1.13
+
+- in Journal's jtxns field, forecasted txns are appended rather than prepended
+
+- API changes:
+
+  added:
+  +setFullPrecision
+  +setMinimalPrecision
+  +expectParseStateOn
+  +embedFileRelative
+  +hereFileRelative
+
+  changed:
+  - amultiplier -> aismultiplier
+  - Amount fields reordered for clearer debug output
+  - tpreceding_comment_lines -> tprecedingcomment, reordered
+  - Hledger.Data.TransactionModifier.transactionModifierToFunction -> modifyTransactions
+  - Hledger.Read.Common.applyTransactionModifiers -> Hledger.Data.Journal.journalModifyTransactions
+
+  - HelpTemplate -> CommandDoc
+
+### credits 1.13
+
+Release contributors:
+Simon Michael,
+Jakob Schöttl,
+Dmitry Astapov.
+
+
+## 2018/12/02 hledger 1.12
+
+***Account type declarations,
+complete balance assertions,
+GHC 8.6 support,
+hledger-ui usability updates,
+misc fixes
+***
+([announcement](https://groups.google.com/d/topic/hledger/H7NYdvo0FeQ/discussion))
+
+  <!-- [project](#project-wide-changes-for-1.12) -->
+  [hledger](#hledger-1.12-1)
+| [hledger-ui](#hledger-ui-1.12)
+| [hledger-web](#hledger-web-1.12)
+| [hledger-api](#hledger-api-1.12)
+| [hledger-lib](#hledger-lib-1.12)
+| [credits](#credits-1.12)
+
+<!-- ### project-wide changes for 1.12 -->
+
+### hledger 1.12
+
+* install script: ensure a new-enough version of stack; more informative output  
+
+* build with GHC 8.6/base-4.12 (Peter Simons)  
+
+* add required upper bound for statistics (Samuel May)  
+
+* --anon anonymises more thoroughly (including linked original postings) (Moritz Kiefer)  
+
+* unbalanced transaction errors now include location info (Mykola Orliuk)  
+
+* accounts command: --drop also affects the default flat output, without needing an explicit --flat flag  
+
+* accounts command: the --codes flag has been dropped  
+
+* accounts command: filtering by non-account-name queries now works  
+
+* add command: fix transaction rendering regression during data entry and in journal file  
+
+* balance command: fix wrongful eliding of zero-balance parent accounts in tree mode (Dmitry Astapov)  
+
+* journal format, bs/bse/cf/is commands: account directives can declare account types ([#877](https://github.com/simonmichael/hledger/issues/877))  
+  Previously you had to use one of the standard english account names
+  (assets, liabilities..) for top-level accounts, if you wanted them to
+  appear in the right place in the balancesheet, balancesheetequity,
+  cashflow or incomestatement reports.
+
+  Now you can use your preferred account names, and use account directives
+  to declare which accounting class (Asset, Liability, Equity, Revenue or
+  eXpense) an account (and its subaccounts) belongs to, by writing one of
+  the letters A, L, E, R, X after the account name, after two or more
+  spaces. This syntax may change (see issue).  Experimental.
+
+  Currently we allow unlimited account type declarations anywhere in the
+  account tree. So you could declare a liability account somewhere under
+  assets, and maybe a revenue account under that, and another asset account
+  even further down. In such cases you start to see oddities like accounts
+  appearing in multiple places in a tree-mode report. I have left it this
+  way for now in case it helps with, eg, modelling contra accounts, or
+  combining multiple files each with their own account type
+  declarations. (In that scenario, if we only allowed type declarations on
+  top-level accounts, or only allowed a single account of each type,
+  complications seem likely.)
+
+* journal format: periodic transaction rules now require a double space separator.  
+  In periodic transaction rules which specify a transaction description or
+  same-line transaction comment, this must be separated from the period
+  expression by two or more spaces, to prevent ambiguous parsing. Eg
+  this will parse correctly as "monthly" thanks to the double space:
+
+      ~ monthly  In 2020 we'll end this monthly transaction.
+
+* journal format: exact/complete balance assertions (Samuel May).  
+  A stronger kind of balance assertion, written with a double equals sign,
+  asserts an account's complete account balance, not just the balance in
+  one commodity. (But only if it is a single-commodity balance, for now.)
+  Eg:
+
+      1/1
+        (a)  A 1
+        (a)  B 1
+        (a)  0   =  A 1   ; commodity A balance assertion, succeeds
+        (a)  0   == A 1   ; complete balance assertion, fails
+
+* journal format: account directives now allow whitespace or a comment after the account name  
+
+* journal format: using ~ for home directory in include directives now works ([#896](https://github.com/simonmichael/hledger/issues/896)) (Mykola Orliuk)  
+
+* journal format: prevent misleading parse error messages with cyclic include directives ([#853](https://github.com/simonmichael/hledger/issues/853)) (Alex Chen)  
+
+* journal format: transaction modifier multipliers handle total-priced amounts correctly ([#928](https://github.com/simonmichael/hledger/issues/928)).  
+  Multipliers (*N) in transaction modifier rules did not multiply
+  total-priced amounts properly.  Now the total prices are also multiplied,
+  keeping the transaction balanced.
+
+* journal format: do amount inference/balance assignments/assertions before transaction modifiers ([#893](https://github.com/simonmichael/hledger/issues/893), [#908](https://github.com/simonmichael/hledger/issues/908)) (Jesse Rosenthal)  
+  Previously, transaction modifier (auto postings) rules were applied
+  before missing amounts were inferred. This meant amount multipliers could
+  generate too many missing-amount postings, making the transaction
+  unbalanceable ([#893](https://github.com/simonmichael/hledger/issues/893)).
+
+  Now, missing amount inference (and balance assignments, and balance
+  assertions, which are interdependent) are done earlier, before
+  transaction modifier rules are applied ([#900](https://github.com/simonmichael/hledger/issues/900), [#903](https://github.com/simonmichael/hledger/issues/903)).
+
+  Also, we now disallow the combination of balance assignments and
+  transaction modifier rules which both affect the same account, which
+  could otherwise cause confusing balance assertion failures ([#912](https://github.com/simonmichael/hledger/issues/912)).
+  (Because assignments now generate amounts to satisfy balance assertions
+  before transaction modifier rules are applied ([#908](https://github.com/simonmichael/hledger/issues/908)).)
+
+* journal format: periodic transaction rules are now aware of Y default year directives. ([#892](https://github.com/simonmichael/hledger/issues/892))  
+  Ie when a default year Y is in effect, they resolve partial or relative
+  dates using Y/1/1 as the reference date, rather than today's date.
+
+### hledger-ui 1.12
+
+* fix "Any" build error with GHC < 8.4  
+
+* error screen: always show error position properly ([#904](https://github.com/simonmichael/hledger/issues/904)) (Mykola Orliuk)  
+
+* accounts screen: show correct balances when there's only periodic transactions  
+
+* drop the --status-toggles flag  
+
+* periodic transactions and transaction modifiers are always enabled.  
+  Rule-based transactions and postings are always generated
+  (--forecast and --auto are always on).
+  Experimental.
+
+* escape key resets to flat mode.  
+  Flat mode is the default at startup. Probably it should reset to tree
+  mode if --tree was used at startup.
+
+* tree mode tweaks: add --tree/-T/-F flags, make flat mode the default,    
+  toggle tree mode with T, ensure a visible effect on register screen
+
+* hide future txns by default, add --future flag, toggle with F.  
+  You may have transactions dated later than today, perhaps piped from
+  print --forecast or recorded in the journal, which you don't want to
+  see except when forecasting.
+
+  By default, we now hide future transactions, showing "today's balance".
+  This can be toggled with the F key, which is easier than setting a
+  date query. --present and --future flags have been added to set the
+  initial mode.
+
+  (Experimental. Interactions with date queries have not been explored.)
+
+* quick help tweaks; try to show most useful info first  
+
+* reorganise help dialog, fit content into 80x25 again  
+
+* styling tweaks; cyan/blue -> white/yellow  
+
+* less noisy styling in horizontal borders ([#838](https://github.com/simonmichael/hledger/issues/838))  
+
+* register screen: positive amounts: green -> black  
+  The green/red scheme helped distinguish the changes column from the
+  black/red balance column, but the default green is hard to read on
+  the pale background in some terminals. Also the changes column is
+  non-bold now.
+
+* use hledger 1.12  
+
+### hledger-web 1.12
+
+* fix duplicate package.yaml keys warned about by hpack  
+
+* use hledger 1.12  
+
+### hledger-api 1.12
+
+* use hledger 1.12  
+
+### hledger-lib 1.12
+
+* switch to megaparsec 7 (Alex Chen)  
+  We now track the stack of include files in Journal ourselves, since
+  megaparsec dropped this feature.
+
+* add 'ExceptT' layer to our parser monad again (Alex Chen)  
+  This was removed under the assumption that it would be possible to
+  write our parser without this capability. However, after a hairy
+  backtracking bug, we would now prefer to have the option to prevent
+  backtracking.
+
+* more support for location-aware parse errors when re-parsing (Alex Chen)  
+
+* make 'includedirectivep' an 'ErroringJournalParser' (Alex Chen)  
+
+* drop Ord instance breaking GHC 8.6 build (Peter Simons)  
+
+* flip the arguments of (divide|multiply)[Mixed]Amount  
+
+* showTransaction: fix a case showing multiple missing amounts  
+  showTransaction could sometimes hide the last posting's amount even if
+  one of the other posting amounts was already implcit, producing invalid
+  transaction output.
+
+* plog, plogAt: add missing newline  
+
+* split up journalFinalise, reorder journal finalisation steps ([#893](https://github.com/simonmichael/hledger/issues/893)) (Jesse Rosenthal)  
+  The `journalFinalise` function has been split up, allowing more granular
+  control.
+
+* journalSetTime --> journalSetLastReadTime  
+
+* journalSetFilePath has been removed, use journalAddFile instead  
+
+### credits 1.12
+
+Release contributors:
+Simon Michael,
+Alex Chen,
+Jesse Rosenthal,
+Samuel May,
+Mykola Orliuk,
+Peter Simons,
+Moritz Kiefer,
+Dmitry Astapov,
+Felix Yan,
+Aiken Cairncross,
+Nikhil Jha.
+
+
+## 2018/9/30 hledger 1.11
+
+***Customisable account display order,
+support for other delimiter-separated formats (eg semicolon-separated),
+new files and roi commands,
+fixes
+***
+([announcement](https://groups.google.com/d/topic/hledger/V62txFLaD_U/discussion))
+
+  <!-- [project](#project-wide-changes-for-1.11) -->
+  [hledger](#hledger-1.11-1)
+| [hledger-ui](#hledger-ui-1.11)
+| [hledger-web](#hledger-web-1.11)
+| [hledger-api](#hledger-api-1.11)
+| [hledger-lib](#hledger-lib-1.11)
+| [credits](#credits-1.11)
+
+<!-- ### project-wide changes for 1.11 -->
+
+
+### hledger 1.11
+
+* The default display order of accounts is now influenced by
+  the order of account directives. Accounts declared by account
+  directives are displayed first (top-most), in declaration order,
+  followed by undeclared accounts in alphabetical order. Numeric
+  account codes are no longer used, and are ignored and considered
+  deprecated.
+
+  So if your accounts are displaying in a weird order after upgrading,
+  and you want them alphabetical like before, just sort your account
+  directives alphabetically.
+
+* Account sorting (by name, by declaration, by amount) is now more
+  robust and supported consistently by all commands (accounts,
+  balance, bs..) in all modes (tree & flat, tabular & non-tabular).
+
+* close: new --opening/--closing flags to print only the opening or
+  closing transaction
+
+* files: a new command to list included files
+
+* prices: query arguments are now supported. Prices can be filtered by
+  date, and postings providing transaction prices can also be filtered.
+
+* rewrite: help clarifies relation to print --auto ([#745](https://github.com/simonmichael/hledger/issues/745))
+
+* roi: a new command to compute return on investment, based on hledger-irr
+
+* test: has more verbose output, more informative failure messages,
+  and no longer tries to read the journal
+
+* csv: We use a more robust CSV lib (cassava) and now support
+  non-comma separators, eg --separator ';' (experimental, this flag
+  will probably become a CSV rule) ([#829](https://github.com/simonmichael/hledger/issues/829))
+
+* csv: interpolated field names in values are now properly case insensitive, so
+  this works:
+
+  fields  ...,Transaction_Date,...
+  date %Transaction_Date
+
+* journal: D (default commodity) directives no longer break multiplier
+  amounts in transaction modifiers (AKA automated postings) ([#860](https://github.com/simonmichael/hledger/issues/860))
+
+* journal: "Automated Postings" have been renamed to "Transaction Modifiers".
+
+* journal: transaction comments in transaction modifier rules are now parsed correctly. ([#745](https://github.com/simonmichael/hledger/issues/745))
+
+* journal: when include files form a cycle, we give an error instead
+  of hanging.
+
+* upper-case day/month names in period expressions no longer give an error ([#847](https://github.com/simonmichael/hledger/issues/847), [#852](https://github.com/simonmichael/hledger/issues/852))
+
+
+### hledger-ui 1.11
+
+* uses hledger-lib 1.11
+
+
+### hledger-web 1.11
+
+* uses hledger-lib 1.11
+
+
+### hledger-api 1.11
+
+* uses hledger-lib 1.11
+
+
+### hledger-lib 1.11
+
+* compilation now works when locale is unset ([#849](https://github.com/simonmichael/hledger/issues/849))
+
+* all unit tests have been converted from HUnit+test-framework to easytest
+
+* doctests now run quicker by default, by skipping reloading between tests. 
+  This can be disabled by passing --slow to the doctests test suite
+  executable.
+
+* doctests test suite executable now supports --verbose, which shows
+  progress output as tests are run if doctest 0.16.0+ is installed
+  (and hopefully is harmless otherwise).
+
+* doctests now support file pattern arguments, provide more informative output.
+  Limiting to just the file(s) you're interested can make doctest start
+  much quicker. With one big caveat: you can limit the starting files,
+  but it always imports and tests all other local files those import.
+
+* a bunch of custom Show instances have been replaced with defaults,
+  for easier troubleshooting.  These were sometimes obscuring
+  important details, eg in test failure output. Our new policy is:
+  stick with default derived Show instances as far as possible, but
+  when necessary adjust them to valid haskell syntax so pretty-show
+  can pretty-print them (eg when they contain Day values, cf
+  https://github.com/haskell/time/issues/101).  By convention, when
+  fields are shown in less than full detail, and/or in double-quoted
+  pseudo syntax, we show a double period (..) in the output.
+
+* Amount has a new Show instance.  Amount's show instance hid
+  important details by default, and showing more details required
+  increasing the debug level, which was inconvenient.  Now it has a
+  single show instance which shows more information, is fairly
+  compact, and is pretty-printable.
+
+  ghci> usd 1
+  OLD:
+  Amount {acommodity="$", aquantity=1.00, ..}
+  NEW:
+  Amount {acommodity = "$", aquantity = 1.00, aprice = NoPrice, astyle = AmountStyle "L False 2 Just '.' Nothing..", amultiplier = False}
+
+  MixedAmount's show instance is unchanged, but showMixedAmountDebug
+  is affected by this change:
+
+  ghci> putStrLn $ showMixedAmountDebug $ Mixed [usd 1]
+  OLD:
+  Mixed [Amount {acommodity="$", aquantity=1.00, aprice=, astyle=AmountStyle {ascommodityside = L, ascommodityspaced = False, asprecision = 2, asdecimalpoint = Just '.', asdigitgroups = Nothing}}]
+  NEW:
+  Mixed [Amount {acommodity="$", aquantity=1.00, aprice=, astyle=AmountStyle "L False 2 Just '.' Nothing.."}]
+
+* Same-line & next-line comments of transactions, postings, etc.
+  are now parsed a bit more precisely (followingcommentp). 
+  Previously, parsing no comment gave the same result as an empty
+  comment (a single newline); now it gives an empty string.  
+  Also, and perhaps as a consequence of the above, when there's no
+  same-line comment but there is a next-line comment, we'll insert an
+  empty first line, since otherwise next-line comments would get moved
+  up to the same line when rendered.
+
+* Hledger.Utils.Test exports HasCallStack
+
+* queryDateSpan, queryDateSpan' now intersect date AND'ed date spans
+  instead of unioning them, and docs are clearer.
+
+* pushAccount -> pushDeclaredAccount
+
+* jaccounts -> jdeclaredaccounts
+
+* AutoTransaction.hs -> PeriodicTransaction.hs & TransactionModifier.hs
+
+* Hledger.Utils.Debug helpers have been renamed/cleaned up
+
+### credits 1.11
+
+Release contributors:
+Simon Michael,
+Joseph Weston,
+Dmitry Astapov,
+Gaith Hallak,
+Jakub Zárybnický,
+Luca Molteni,
+SpicyCat.
+
+
+
+## 2018/6/30 hledger 1.10
+
+***hledger-web edit/upload/download and permissions,
+more expressive periodic transactions,
+more informative parse errors,
+misc fixes
+***
+([announcement](https://groups.google.com/forum/#!msg/hledger/SWFV2n6xMQA/Ss78nil8AQAJ))
+
+  [project](#project-wide-changes-for-1.10)
+| [hledger-lib](#hledger-lib-1.10)
+| [hledger](#hledger-1.10-1)
+| [hledger-ui](#hledger-ui-1.10)
+| [hledger-web](#hledger-web-1.10)
+| [hledger-api](#hledger-api-1.10)
+| [credits](#credits-1.10)
+
+### project-wide changes for 1.10
+
+* build cleanly with all supported GHC versions again (7.10 to 8.4)
+
+* support latest deps
+
+* back in Stackage LTS (12.0)
+
+
+### hledger-lib 1.10
+
+* extensive refactoring and cleanup of parsers and related types and utilities
+
+* readJournalFile(s) cleanup, these now use InputOpts
+
+* doctests now run a bit faster ([#802](https://github.com/simonmichael/hledger/issues/802))
+
+
+### hledger 1.10
+
+* journal: many parse error messages have become more informative, and
+  some now show the source line and error location.
+
+* journal: `;tag:` is no longer parsed as a tag named ";tag" ([#655](https://github.com/simonmichael/hledger/issues/655))
+
+* journal: transaction price amounts having their own price amounts is
+  now a parse error
+
+* journal: amounts with space as digit group separator and trailing whitespace 
+  now parse correctly ([#780](https://github.com/simonmichael/hledger/issues/780))
+
+* journal: in amounts containing digits and a single space, the space
+  is now interpreted as a digit group separator, not a decimal separator ([#749](https://github.com/simonmichael/hledger/issues/749))
+
+* journal: in commodity/format/D directives, the amount must now include a decimal separator.
+
+  When more precise control is needed over number parsing, our
+  recommended solution is commodity directives. Commodity directives
+  that don't specify the decimal separator leave things ambiguous,
+  increasing the chance of misparsing numbers. In some cases it could
+  cause amounts with a decimal point to be parsed as if with a digit
+  group separator, so 1.234 became 1234.
+
+  It seems the simple and really only way to do this reliably is to require
+  an explicit decimal point character. Most folks probably do this already.
+  Unfortunately, it makes another potential incompatiblity with ledger and
+  beancount journals. But the error message will be clear and easy to
+  work around.
+
+* journal: directives currently have diverse and somewhat tricky
+  semantics, especially with multiple files.  The manual now describes
+  their behaviour precisely.
+
+* journal: `alias` and `apply account` directives now affect `account` directives ([#825](https://github.com/simonmichael/hledger/issues/825))
+
+* journal: periodic transactions can now have all the usual transaction fields
+  (status mark, code, description, comment), for generating more expressive
+  forecast transactions.
+
+* journal: forecast transactions now have the generating period
+  expression attached as a tag named "recur".
+
+* journal: periodic transactions now start on the first instance of the 
+  recurring date, rather than the day after the last regular transaction ([#750](https://github.com/simonmichael/hledger/issues/750))
+
+* journal: periodic transaction rules now allow period expressions relative to today's date
+
+* csv: amount-in/amount-out errors are more detailed
+
+* balance: --drop is now ignored when not in flat mode, 
+  rather than producing a corrupted report ([#754](https://github.com/simonmichael/hledger/issues/754))
+
+* budget: --drop now preserves the <unbudgeted> top-level account in --budget reports
+
+* register: in CSV output, the code field is now included ([#746](https://github.com/simonmichael/hledger/issues/746))
+
+* smart dates now allow  the YYYYMM format, and are better documented
+
+* uses hledger-lib 1.10
+
+
+### hledger-ui 1.10
+
+* the effect of --value, --forecast, and --anon flags is now preserved on reload ([#753](https://github.com/simonmichael/hledger/issues/753))
+
+* edit-at-transaction-position is now also supported when $EDITOR is neovim
+
+* support/require fsnotify 0.3.0.1+
+
+* uses hledger-lib 1.10
+
+
+### hledger-web 1.10
+
+* view, add, edit permissions can be set at CLI or by Sandstorm HTTP header
+
+* the edit form has been revived, for whole-journal editing
+
+* the journal can now be uploaded and downloaded
+
+* the e key toggles empty accounts in the sidebar
+
+* multiple -f options, and --auto, work again
+
+* uses hledger-lib 1.10
+
+
+### hledger-api 1.10
+
+* uses hledger-lib 1.10
+
+
+### credits 1.10
+
+Release contributors:
+Simon Michael,
+Alex Chen,
+Everett Hildenbrandt,
+Jakub Zárybnický,
+Nolan Darilek,
+Dmitry Astapov,
+Jacob Weisz,
+Peter Simons,
+Stephen Morgan,
+Pavlo Kerestey,
+Trevor Riles,
+Léo Gaspard,
+Mykola Orliuk,
+Wad,
+Nana Amfo.
+
+
+
+## 2018/3/31 hledger 1.9
+
+***Report cleanups,
+normal-positive reports,
+HTML output,
+account sort codes,
+budget improvements.
+***
+
+([announcement](https://groups.google.com/forum/#!topic/hledger/DifO6UbeKnU))
+
+Release contributors:
+Simon Michael,
+Eli Flanagan,
+Peter Simons,
+Christoph Nicolai,
+agander,
+M Parker,
+Moritz Kiefer,
+Mykola Orliuk.
+
+  [project](#project-wide-changes-for-1.9)
+| [hledger-lib](#hledger-lib-1.9)
+| [hledger](#hledger-1.9-1)
+| [hledger-ui](#hledger-ui-1.9)
+| [hledger-web](#hledger-web-1.9)
+| [hledger-api](#hledger-api-1.9)
+
+### project-wide changes for 1.9
+
+* support ghc 8.4, latest deps
+
+
+### hledger-lib 1.9
+
+* when the system text encoding is UTF-8, ignore any UTF-8 BOM prefix
+found when reading files.
+
+* CompoundBalanceReport amounts are now normally positive. (experimental)
+
+### hledger 1.9
+
+* journal: account directives can define a numeric account code to
+customize sorting.  bal/bs/cf/is will sort accounts by account code,
+if any, then account name.
+
+* journal: support scientific number notation ([#704](https://github.com/simonmichael/hledger/issues/704), [#706](https://github.com/simonmichael/hledger/issues/706))
+
+* csv: reading a CSV file containing no records is no longer an error
+
+* cli: when the system text encoding is UTF-8, ignore any UTF-8 BOM
+prefix found when reading files.  (Paypal's new CSV has this BOM
+prefix, causing a confusing parse error.)
+
+* cli: tabular reports no longer have a trailing blank line added.
+(This allows omitting the ">=0" delimiters in our functional tests,
+making them easier to read and maintain.)
+
+* acc: the accounts command now has --declared and --used flags
+
+* bal: the --invert flag flips all signs
+
+* bal: --drop now works with CSV output
+
+* bal/bs/bse/cf/is: show overall report span in title
+
+* bal/bs/bse/cf/is: show short month names as headings in monthly reports
+
+* bal/bs/bse/cf/is: these commands can now generate HTML output
+
+* bal/bs/is/cf: drop short name and indent fields from multicolumn CSV
+
+* bs/bse/cf/is: these, the "financial statement" commands, now show
+normal income, liability and equity balances as positive numbers.
+Negative numbers now indicate a contra-balance (eg an overdrawn
+checking account), a net loss, or a negative net worth.  This makes
+these reports more like conventional financial statements, and easier
+to read and share with others. (Other commands, like balance, have not
+changed.)  (experimental)
+
+* bs/cf/is: always show a tabular report, even with no report
+interval.  Previously you would get a simple borderless report like
+the original balance command.  Less code, fewer bugs.
+
+* bs/bse/cf/is: in CSV output, don't repeat the headings row for each subreport
+
+* budget: warn that CSV output with bal --budget is unimplemented
+
+* budget: bal --budget shows budget goals even with no or zero actual amounts. 
+Makes budget reports more intuitive, at the cost of a temporary hack
+which may misorder columns in some cases (if actual and budget
+activity occur in a different range of columns).
+
+* budget: --budget uses only periodic txns with the selected interval.  
+Budgets with different interval, eg a daily and weekly budget, are independent.
+
+* budget: show mostly fixed-width columns for readability
+
+* budget: fix bug where a budget report could include budget goals
+ending on the day before the report start date (splitSpan issue)
+
+* close: the equity command has been renamed to close.  It now ignores
+any begin date (it always closes historical end balances).  It also
+ignores --date2.
+
+### hledger-ui 1.9
+
+* -E/--empty toggles zeroes at startup (with opposite default to cli)
+
+### hledger-web 1.9
+
+* -E/--empty toggles zeroes at startup (with opposite default to cli)
+
+### hledger-api 1.9
+
+
+
+## 2017/12/31 hledger 1.5
+
+***
+***
+
+([announcement](https://groups.google.com/forum/#!topic/hledger/CyNifndzZxk))
+
+Release contributors:
+Simon Michael,
+Dmitry Astapov,
+Mykola Orliuk,
+Eli Flanagan,
+Elijah Caine,
+Sam Jeeves,
+Matthias Kauer,
+Hans-Peter Deifel,
+Mick Dekkers,
+Nadrieril,
+Alvaro Fernando García.
+
+  [project](#project-wide-changes-for-1.5)
+| [hledger-lib](#hledger-lib-1.5)
+| [hledger](#hledger-1.5-1)
+| [hledger-ui](#hledger-ui-1.5)
+| [hledger-web](#hledger-web-1.5)
+| [hledger-api](#hledger-api-1.5)
+
+### project-wide changes for 1.5
+
+* remove upper bounds on all but hledger* and base (experimental)
+  It's rare that my deps break their api or that newer versions must
+  be avoided, and very common that they release new versions which I
+  must tediously and promptly test and release hackage revisions for
+  or risk falling out of stackage. Trying it this way for a bit.
+
+
+### hledger-lib 1.5
+
+* -V/--value uses today's market prices by default, not those of last transaction date. [#683](https://github.com/simonmichael/hledger/issues/683), [#648](https://github.com/simonmichael/hledger/issues/648))
+
+* csv: allow balance assignment (balance assertion only, no amount) in csv records (Nadrieril)
+
+* journal: allow space as digit group separator character, [#330](https://github.com/simonmichael/hledger/issues/330) (Mykola Orliuk)
+
+* journal: balance assertion errors now show line of failed assertion posting, [#481](https://github.com/simonmichael/hledger/issues/481) (Sam Jeeves)
+
+* journal: better errors for directives, [#402](https://github.com/simonmichael/hledger/issues/402) (Mykola Orliuk)
+
+* journal: better errors for included files, [#660](https://github.com/simonmichael/hledger/issues/660) (Mykola Orliuk)
+
+* journal: commodity directives in parent files are inherited by included files, [#487](https://github.com/simonmichael/hledger/issues/487) (Mykola Orliuk)
+
+* journal: commodity directives limits precision even after -B, [#509](https://github.com/simonmichael/hledger/issues/509) (Mykola Orliuk)
+
+* journal: decimal point/digit group separator chars are now inferred from an applicable commodity directive or default commodity directive. [#399](https://github.com/simonmichael/hledger/issues/399), [#487](https://github.com/simonmichael/hledger/issues/487) (Mykola Orliuk)
+
+* journal: numbers are parsed more strictly (Mykola Orliuk)
+
+* journal: support Ledger-style automated postings, enabled with --auto flag (Dmitry Astapov)
+
+* journal: support Ledger-style periodic transactions, enabled with --forecast flag (Dmitry Astapov)
+
+* period expressions: fix "nth day of {week,month}", which could generate wrong intervals (Dmitry Astapov)
+
+* period expressions: month names are now case-insensitive (Dmitry Astapov)
+
+* period expressions: stricter checking for invalid expressions (Mykola Orliuk)
+
+* period expressions: support "every 11th Nov" (Dmitry Astapov)
+
+* period expressions: support "every 2nd Thursday of month" (Dmitry Astapov)
+
+* period expressions: support "every Tuesday", short for "every <n>th day of week" (Dmitry Astapov)
+
+### hledger 1.5
+
+* --auto adds Ledger-style automated postings to transactions (Dmitry Astapov, Mykola Orliuk)
+
+* --forecast generates Ledger-style periodic transactions in the future (Dmitry Astapov, Mykola Orliuk)
+
+* -V/--value uses today's market prices by default, not those of last transaction date. [#683](https://github.com/simonmichael/hledger/issues/683), [#648](https://github.com/simonmichael/hledger/issues/648)
+
+* add: suggest implied (parent) and declared (by account directives) account names also
+
+* bal: --budget shows performance compared to budget goals defined
+  with periodic transactions.  Accounts with budget goals are
+  displayed folded (depth-clipped) at a depth matching the budget
+  specification.  Unbudgeted accounts are hidden, or with
+  --show-unbudgeted, shown at their usual depth. (Dmitry Astapov)
+
+* import: the output of --dry-run is now valid journal format
+
+* print: -B shows converted amounts again, as in 1.1, even without
+  -x. [#551](https://github.com/simonmichael/hledger/issues/551) (Mykola Orliuk, Simon Michael)
+
+* tag: the first argument now filters tag names, additional arguments
+  filter transactions ([#261](https://github.com/simonmichael/hledger/issues/261))
+
+### hledger-ui 1.5
+
+* fix help -> view manual (on posix platforms) [#623](https://github.com/simonmichael/hledger/issues/623)
+
+* support -V/--value, --forecast, --auto
+
+### hledger-web 1.5
+
+* add form account fields now suggest implied and declared account names also
+
+* add form date field now uses a datepicker (Eli Flanagan)
+
+* don't write a session file at startup, don't require a writable working directory
+
+* support -V/--value, --forecast, --auto
+
+### hledger-api 1.5
+
+
+## 2017/9/30 hledger 1.4
+
+***easy install script,
+simpler help commands,
+experimental addon commands now built in,
+new balancesheetequity/tags commands,
+new import command for easy CSV merging,
+print can detect new transactions,
+balance reports can sort by amount,
+cli conveniences
+***
+
+([announcement](https://groups.google.com/forum/#!topic/hledger/tdtkhchqg9k))
+
+Release contributors:
+Simon Michael,
+Nicholas Niro,
+Hans-Peter Deifel,
+Jakub Zárybnický,
+Felix Yan,
+Mark Hansen,
+Christian G. Warden,
+Nissar Chababy,
+Peter Simons.
+
+  [project](#project-wide-changes-for-1.4)
+| [hledger-lib](#hledger-lib-1.4)
+| [hledger](#hledger-1.4-1)
+| [hledger-ui](#hledger-ui-1.4)
+| [hledger-web](#hledger-web-1.4)
+| [hledger-api](#hledger-api-1.4)
+
+### project-wide changes for 1.4
+
+* update stack configs for the last three GHC versions, add "make
+test-stackage" for finding stackage build problems, switch to GHC
+8.2.1 as default for developer builds
+
+* streamline docs page
+
+* improve changelog/release notes process
+
+* improve makefile help and speed
+
+* Added a new installer script for the hledger tools, which aims to
+dodge common pitfalls and just work. Based on the stack install
+script, this bash script is cross platform, uses cabal or stack,
+installs stack and GHC if needed, and installs the latest release of
+all major hledger packages. See http://hledger.org/download for details.
+
+### hledger-lib 1.4
+
+* add readJournalFile[s]WithOpts, with simpler arguments and support
+for detecting new transactions since the last read.
+
+* query: add payee: and note: query terms, improve description/payee/note docs (Jakub Zárybnický, Simon Michael, [#598](https://github.com/simonmichael/hledger/issues/598), [#608](https://github.com/simonmichael/hledger/issues/608))
+
+* journal, cli: make trailing whitespace significant in regex account aliases
+Trailing whitespace in the replacement part of a regular expression
+account alias is now significant. Eg, converting a parent account to
+just an account name prefix: --alias '/:acct:/=:acct '
+
+* timedot: allow a quantity of seconds, minutes, days, weeks, months
+  or years to be logged as Ns, Nm, Nd, Nw, Nmo, Ny
+
+* csv: switch the order of generated postings, so account1 is first.
+This simplifies things and facilitates future improvements.
+
+* csv: show the "creating/using rules file" message only with --debug
+
+* csv: fix multiple includes in one rules file
+
+* csv: add "newest-first" rule for more robust same-day ordering
+
+* deps: allow ansi-terminal 0.7
+
+* deps: add missing parsec lower bound, possibly related to [#596](https://github.com/simonmichael/hledger/issues/596), [fpco/stackage#2835](https://github.com/fpco/stackage/issues/2835)
+
+* deps: drop oldtime flag, require time 1.5+
+
+* deps: remove ghc < 7.6 support, remove obsolete CPP conditionals
+
+* deps: fix test suite with ghc 8.2
+
+<!-- 1.3.1 (2017/8/25) -->
+
+* Fix a bug with -H showing nothing for empty periods ([#583](https://github.com/simonmichael/hledger/issues/583), Nicholas Niro)
+This patch fixes a bug that happened when using the -H option on
+a period without any transaction. Previously, the behavior was no
+output at all even though it should have shown the previous ending balances
+of past transactions. (This is similar to previously using -H with -E,
+but with the extra advantage of not showing empty accounts)
+
+* allow megaparsec 6 ([#594](https://github.com/simonmichael/hledger/issues/594))
+
+* allow megaparsec-6.1 (Hans-Peter Deifel)
+
+* fix test suite with Cabal 2 ([#596](https://github.com/simonmichael/hledger/issues/596))
+
+### hledger 1.4
+
+* cli: a @FILE argument reads flags & args from FILE, one per line
+
+* cli: reorganized commands list, added some new command aliases:
+  accounts: a
+  balance:  b
+  print:    p, txns
+  register: r
+
+* cli: accept -NUM as a shortcut for --depth=NUM (eg: -2)
+
+* cli: improve command-line help for --date2 ([#604](https://github.com/simonmichael/hledger/issues/604))
+
+* cli: make --help and -h the same, drop --man and --info for now ([#579](https://github.com/simonmichael/hledger/issues/579))
+
+* help: offers multiple formats, accepts topic substrings.
+  The separate info/man commands have been dropped. help now
+  chooses an appropriate documentation format as follows: 
+  - it uses info if available, 
+  - otherwise man if available, 
+  - otherwise $PAGER if defined, 
+  - otherwise less if available, 
+  - otherwise it prints on stdout
+  - (and it always prints on stdout when piped). 
+  You can override this with the `--info`/`--man`/`--pager`/`--cat` flags.
+  ([#579](https://github.com/simonmichael/hledger/issues/579))
+
+* bal/bs/cf/is: --sort-amount/-S sorts by largest amount instead of
+  account name
+
+* bs/cf/is: support --output-file and --output-format=txt|csv
+  The CSV output should be reasonably ok for dragging into a
+  spreadsheet and reformatting.
+
+* bal/bs/cf/is: consistent double space between columns, consistent
+  single final blank line.  Previously, amounts wider than the column
+  headings would be separated by only a single space.
+
+* bs/is: don't let an empty subreport disable the grand totals (fixes [#588](https://github.com/simonmichael/hledger/issues/588))
+
+* cf: exclude asset accounts with ":fixed" in their name (Christian G. Warden, Simon Michael, [#584](https://github.com/simonmichael/hledger/issues/584))
+
+* new balancesheetequity command: like balancesheet but also shows
+  equity accounts (Nicholas Niro)
+
+* new import command: adds new transactions seen in one or more input
+  files to the main journal file
+
+* print: --new shows only transactions added since last time
+  (saves state in .latest.JOURNALFILE file)
+
+* new tags command: lists tags in matched transactions
+
+* most addons formerly shipped in bin/ are now builtin commands. These
+  include: check-dates, check-dupes, equity, prices, print-unique,
+  register-match, rewrite.
+
+* refactor: new Commands module and subdirectory.
+  Builtin commands are now gathered more tightly in a single module,
+  Hledger.Cli.Commands, facilitating change.  The legacy "convert"
+  command has been dropped.
+
+* refactor: BalanceView -> CompoundBalanceCommand
+
+* deps: drop support for directory < 1.2
+
+* deps: allow ansi-terminal 0.7
+
+* deps: drop oldtime flag, require time 1.5+
+
+* deps: simplify shakespeare bounds
+
+* deps: remove ghc < 7.6 support
+
+<!-- 1.3.1 (2017/8/25) -->
+
+* bs/is: don't let an empty subreport disable the grand totals ([#588](https://github.com/simonmichael/hledger/issues/588))
+
+* allow megaparsec 6 ([#594](https://github.com/simonmichael/hledger/issues/594))
+
+* allow megaparsec-6.1 (Hans-Peter Deifel)
+
+* restore upper bounds on hledger packages
+
+### hledger-ui 1.4
+
+* a @FILE argument reads flags & args from FILE, one per line
+
+* enable --pivot and --anon options, like hledger CLI ([#474](https://github.com/simonmichael/hledger/issues/474)) (Jakub Zárybnický)
+
+* accept -NUM as a shortcut for --depth NUM
+
+* deps: allow ansi-terminal 0.7
+
+* deps: drop oldtime flag, require time 1.5+
+
+<!-- # 1.3.1 (2017/8/25) -->
+
+* allow megaparsec 6 ([#594](https://github.com/simonmichael/hledger/issues/594), Simon Michael, Hans-Peter Deifel)
+
+* allow megaparsec-6.1 (Hans-Peter Deifel)
+
+* allow vty 5.17 (Felix Yan)
+
+* allow brick 0.24
+
+* restore upper bounds on hledger packages
+
+### hledger-web 1.4
+
+* a @FILE argument reads flags & args from FILE, one per line
+
+* enable --pivot and --anon options, like hledger CLI ([#474](https://github.com/simonmichael/hledger/issues/474)) (Jakub Zárybnický)
+
+* web: Make "Add transaction" button tabbable ([#430](https://github.com/simonmichael/hledger/issues/430)) (Jakub Zárybnický)
+
+* accept -NUM as a shortcut for --depth NUM
+
+* deps: drop oldtime flag, require time 1.5+, remove ghc < 7.6 support
+
+<!-- # 1.3.2 (2017/8/25) -->
+
+* remove unnecessary bound to satisfy hackage server
+
+<!-- # 1.3.1 (2017/8/25) -->
+
+* allow megaparsec 6 ([#594](https://github.com/simonmichael/hledger/issues/594), Simon Michael, Hans-Peter Deifel)
+
+* allow megaparsec-6.1 (Hans-Peter Deifel)
+
+* restore upper bounds on hledger packages
+
+### hledger-api 1.4
+
+* api: add support for swagger2 2.1.5+ (fixes [#612](https://github.com/simonmichael/hledger/issues/612))
+
+<!-- # 1.3.1 (2017/8/25) -->
+
+* require servant-server 0.10+ to fix compilation warning
+
+* restore upper bounds on hledger packages
+
+
+## 2017/6/30 hledger 1.3
+
+***terminology/UI improvements for the status field,
+selection/scrolling/movement improvements in hledger-ui,
+negative amounts shown in red,
+bugfixes.***
+
+([announcement](https://groups.google.com/d/msg/hledger/X4iR1wpaq0E/_v5BLQIXAgAJ))
+
+Release contributors:
+Simon Michael,
+Mykola Orliuk,
+Christian G. Warden,
+Dmitry Astapov,
+Justin Le,
+Joe Horsnell,
+Nicolas Wavrant,
+afarrow,
+Carel Fellinger,
+flip111,
+David Reaver,
+Felix Yan,
+Nissar Chababy,
+Jan Zerebecki.
+
+  [project](#project-wide-changes-for-1.3)
+| [hledger-lib](#hledger-lib-1.3)
+| [hledger](#hledger-1.3-1)
+| [hledger-ui](#hledger-ui-1.3)
+| [hledger-web](#hledger-web-1.3)
+| [hledger-api](#hledger-api-1.3)
+
+### project-wide changes for 1.3
+
+<!-- #### Packaging -->
+
+<!-- #### Finance -->
+
+<!-- #### Documentation and website -->
+
+<!-- #### Examples -->
+
+#### Tools
+
+make ghci-prof starts GHCI in profiling mode, enabling stack traces with traceStack
+
+make ghci-web now also creates required symlinks
+
+make site-reload opens an auto-reloading browser on the latest site html
+
+make changelog-draft shows the commits since last tag as org nodes
+
+### hledger-lib 1.3
+
+#### journal format
+
+The "uncleared" transaction/posting status (and associated UI flags
+and keys) has been renamed to "unmarked" to remove ambiguity and
+confusion. See the issue and linked mail list discussion for more
+background.  ([#564](https://github.com/simonmichael/hledger/issues/564))
+
+#### csv format
+
+In CSV conversion rules, assigning to the "balance" field name
+creates balance assertions ([#537](https://github.com/simonmichael/hledger/issues/537), Dmitry Astapov).
+
+Doubled minus signs are handled more robustly (fixes [#524](https://github.com/simonmichael/hledger/issues/524), Nicolas
+Wavrant, Simon Michael)
+
+#### Misc
+
+Multiple status: query terms are now OR'd together. ([#564](https://github.com/simonmichael/hledger/issues/564))
+
+Deps: allow megaparsec 5.3.
+
+### hledger 1.3
+
+#### CLI
+
+The "uncleared" transaction/posting status, and associated UI flags
+and keys, have been renamed to "unmarked" to remove ambiguity and
+confusion.  This means that we have dropped the `--uncleared` flag,
+and our `-U` flag now matches only unmarked things and not pending
+ones. See the issue and linked mail list discussion for more
+background. ([#564](https://github.com/simonmichael/hledger/issues/564))
+
+Also the -P short flag has been added for --pending, and the -U/-P/-C
+flags can be combined. 
+
+bs/is: fix "Ratio has zero denominator" error ([#535](https://github.com/simonmichael/hledger/issues/535))
+
+bs/is/cf: fix --flat ([#552](https://github.com/simonmichael/hledger/issues/552)) (Justin Le, Simon Michael)
+
+bal/bs/is/cf: show negative amounts in red (Simon Michael, Justin Le).
+These commands now show negative amounts in red, when hledger detects
+that ANSI codes are supported, (ie when TERM is not "dumb" and stdout
+is not being redirected or piped).
+
+print: show pending mark on postings (fixes [#563](https://github.com/simonmichael/hledger/issues/563)).
+A pending mark on postings is now displayed, just like a cleared mark.
+Also there will now be a space between the mark and account name.
+
+print: amounts are now better aligned, eg when there are posting
+status marks or virtual postings.
+
+#### Addons
+
+prices: add --inverted-costs flag, sort output, increase precision
+(Mykola Orliuk)
+
+rewrite: add support for rewriting multipler postings into different
+commodities. For example, postings in hours can be used to generate
+postings in USD. ([#557](https://github.com/simonmichael/hledger/issues/557)) (Christian G. Warden)
+
+`make addons` compiles the experimental add-ons.
+
+### hledger-ui 1.3
+
+The register screen now shows transaction status marks.
+
+The "uncleared" status, and associated UI flags and keys, have been
+renamed to "unmarked" to remove ambiguity and confusion.  This means
+that we have dropped the `--uncleared` flag, and our `-U` flag now
+matches only unmarked things and not pending ones. See the issue and
+linked mail list discussion for more background. ([#564](https://github.com/simonmichael/hledger/issues/564))
+
+The P key toggles pending mode, consistent with U (unmarked) and C
+(cleared). There is also a temporary --status-toggles flag for testing
+other toggle styles; see `hledger-ui -h`. ([#564](https://github.com/simonmichael/hledger/issues/564))
+
+There is now less "warping" of selection when lists change:
+
+- When the selected account disappears, eg when toggling zero
+  accounts, the selection moves to the alphabetically preceding item,
+  instead of the first one.
+
+- When the selected transaction disappears, eg when toggling status
+  filters, the selection moves to the nearest transaction by date (and
+  if several have the same date, by journal order), instead of the
+  last one.
+
+In the accounts and register screens, you can now scroll down further
+so that the last item need not always be shown at the bottom of the
+screen.  And we now try to show the selected item centered in the
+following situations:
+
+-   after moving to the end with Page down/End
+-   after toggling filters/display modes (status, real, historical..)
+-   on pressing the control-l key (this forces a screen redraw, also)
+-   on entering the register screen from the accounts screen
+    (except the first time, a known problem).
+
+Items near the top won't be centered because we don't scroll above the
+top of the list.
+
+Emacs movement keys are now supported, as well as VI keys.
+`CTRL-b/CTRL-f/CTRL-n/CTRL-p` and `hjkl` should work wherever unmodified arrow keys work.
+
+In the transaction screen, amounts are now better aligned, eg when
+there are posting status marks or virtual postings.
+
+Deps: allow brick 0.19 ([#575](https://github.com/simonmichael/hledger/issues/575), Felix Yan, Simon Michael)
+
+### hledger-web 1.3
+
+Depends on hledger 1.3.
+
+### hledger-api 1.3
+
+Depends on hledger 1.3.
+
+
+
+## 2017/3/31 hledger 1.2
+
+***new commands list,
+more powerful balancesheet/incomestatement/cashflow commands,
+more parseable print output,
+better --pivot, 
+basic automated postings and periodic transactions support,
+more and easier addons,
+bugfixes
+***
+
+<!-- ([announcement](http://thread.gmane.org/gmane.comp.finance.ledger.hledger/1267)) -->
+<!-- ([announcement](https://groups.google.com/d/topic/hledger/WgdTy3-a6sc/discussion))  -->
+
+Release contributors:
+Simon Michael,
+Mykola Orliuk,
+Justin Le,
+Peter Simons,
+Stefano Rodighiero,
+Moritz Kiefer,
+Pia Mancini,
+Bryan Richter,
+Steven R. Baker,
+Hans-Peter Deifel,
+Joshua Chia,
+Joshua Kehn,
+Michael Walker.
+
+  [project](#project-wide-changes-for-1.2)
+| [hledger-lib](#hledger-lib-1.2)
+| [hledger](#hledger-1.2-1)
+| [hledger-ui](#hledger-ui-1.2)
+| [hledger-web](#hledger-web-1.2)
+| [hledger-api](#hledger-api-1.2)
+
+### project-wide changes for 1.2
+
+#### Packaging
+
+bump stack config to latest lts,
+bump brick to 0.15.2 to allow hledger-iadd install in hledger dir,
+update cabal files to latest hpack 0.17.0/stack 1.4 format ([#512](https://github.com/simonmichael/hledger/issues/512)),
+use more accurate license tag in Cabal file (Peter Simons).
+
+#### Finance
+
+set up a hledger open collective (http://opencollective.com/hledger),
+more devguide links to issues with bounties,
+codefund link,
+start tracking and publishing project finances (dogfooding!).
+
+#### Documentation and website
+
+docs page & manual cleanups, 
+begin organising a cookbook,
+update addons list,
+move detailed addon docs out of hledger manual,
+document addons installation,
+explain print's CSV output,
+note an issue with balance assertions & multiple -f options,
+clarify tags,
+add github stars widget to home and devguide,
+improve market price docs,
+ui & web screenshots layout fixes,
+fix extra whitespace after synopsis in hledger-web text manuals,
+update accounts directive/budget/rewrite/read-related mockups,
+drop old org notes.
+
+#### Examples
+
+consolidate extra/ and data/ in examples/,
+tarsnap csv rules & reporting example,
+xpensetracker csv rules.
+
+#### Tools
+
+Travis CI now checks functional tests/build warnings/addons,
+temporary workaround for Appveyor CI failures,
+remove accidentally committed pandoc executables,
+some pandoc filter fixes,
+mailmap file to clean up git log authors,
+bench.hs cleanup,
+fix gitignore of generated manuals,
+avoid excessive rebuilding with make [func]test,
+run functional tests more verbosely,
+add alex/happy update step to cabal-install.sh.
+
+### hledger-lib 1.2
+
+#### journal format
+
+A pipe character can optionally be used to delimit payee names in
+transaction descriptions, for more accurate querying and pivoting by
+payee.  Eg, for a description like `payee name | additional notes`,
+the two parts will be accessible as pseudo-fields/tags named `payee`
+and `note`.
+<!-- (When descriptions do not contain a pipe character, `payee` and `note` are synonyms for `description`.) -->
+
+Some journal parse errors now show the range of lines involved, not just the first.
+
+#### ledger format
+
+The experimental `ledger:` reader based on the WIP ledger4 project has
+been disabled, reducing build dependencies.
+
+#### Misc
+
+Fix a bug when tying the knot between postings and their parent transaction, reducing memory usage by about 10% ([#483](https://github.com/simonmichael/hledger/issues/483)) (Mykola Orliuk)
+
+Fix a few spaceleaks ([#413](https://github.com/simonmichael/hledger/issues/413)) (Moritz Kiefer)
+
+Add Ledger.Parse.Text to package.yaml, fixing a potential build failure.
+
+Allow megaparsec 5.2 ([#503](https://github.com/simonmichael/hledger/issues/503))
+
+Rename optserror -> usageError, consolidate with other error functions
+
+### hledger 1.2
+
+#### CLI
+
+"hledger" and "hledger -h" now print a better organised commands list
+and general usage message respectively ([#297](https://github.com/simonmichael/hledger/issues/297)).
+
+The common reporting flags can now be used anywhere on the command line.
+
+Fixed deduplication of addons in commands list.
+
+Fixed ugly stack traces in command line parse error messages.
+
+The -V/--value flag is now a global report flag, so it works with
+balance, print, register, balancesheet, incomestatement, cashflow,
+etc. (Justin Le)
+
+The `--pivot` global reporting option replaces all account names with
+the value of some other field or tag. It has been improved, eg:
+
+- we don't add the field/tag name name as a prefix
+- when pivoting on a tag, if the tag is missing we show a blank 
+  (rather than showing mixed tag values and account names)
+- a pipe character delimiter may be used in descriptions to get a more accurate
+  and useful payee report (`hledger balance --pivot payee`)
+
+options cleanups
+
+#### Addons
+
+Easier installation:
+move add-ons and example scripts to bin/, 
+convert to stack scripts,
+add a build script to install all deps,
+add some functional tests,
+test add-ons with Travis CI,
+add installation docs to download page.
+
+Improved docs: 
+all addons now contain their own documentation. Most of them (all but
+hledger-budget) use a new reduced-boilerplate declaration format
+and can show short (-h) and long (--help) command line help.
+(Long help is declared with pre and postambles to the generated
+options help, short help is that truncated at the start of the hledger
+common flags.)
+
+`hledger` now shows a cleaner list of addon commands, showing only the
+compiled version of an addon when both source and compiled versions
+are in $PATH. (Addons with .exe extension or no extension are
+considered compiled.  Modification time is not checked, ie, an old
+compiled addon will override a newer source version.  If there are
+three or more versions of an addon, all are shown.  )
+
+New addons added/included:
+
+- autosync - example symlink to ledger-autosync
+- budget - experimental budget reporting command supporting Ledger-like periodic transactions and automated transactions (Mykola Orliuk)
+- chart - pie-chart-generating prototype, a repackaging of the old hledger-chart tool
+- check - more powerful balance assertions (Michael Walker)
+- check-dupes - find accounts sharing the same leaf name (Stefano Rodighiero)
+- prices - show all market price records (Mykola Orliuk)
+- register-match - a helper for ledger-autosync's deduplication, finds best match for a transaction description
+
+The equity command now always generates a valid journal transaction,
+handles prices better, and adds balance assertions (Mykola Orliuk).
+
+The rewrite command is more robust and powerful (Mykola Orliuk):
+
+- in addition to command-line rewrite options, it understands rewrite rules
+  defined in the journal, similar to Ledger's automated transactions ([#99](https://github.com/simonmichael/hledger/issues/99)).
+  Eg:
+    ```journal
+    = ^income
+        (liabilities:tax)  *.33
+
+    = expenses:gifts
+        budget:gifts  *-1
+        assets:budget  *1
+    ```
+
+- it can generate diff output, allowing easier review of the proposed
+  changes, and safe modification of original journal files (preserving
+  file-level comments and directives). Eg:
+    ```
+    hledger-rewrite --diff Agency --add-posting 'Expenses:Taxes  *0.17' | patch
+    ```
+
+- rewrites can affect multiple postings in a transaction, not just one.
+
+- posting-specific dates are handled better
+
+#### balance
+
+A new --pretty-tables option uses unicode characters for rendering
+table borders in multicolumn reports ([#522](https://github.com/simonmichael/hledger/issues/522)) (Moritz Kiefer)
+
+#### balancesheet/cashflow/incomestatement
+
+These commands are now more powerful, able to show multicolumn reports
+and generally having the same features as the balance command. (Justin Le)
+
+balancesheet has always ignored a begin date specified with a `-b` or
+`-p` option; now it also ignores a begin date specified with a `date:`
+query. (Related discussion at [#531](https://github.com/simonmichael/hledger/issues/531))
+
+#### print
+
+The output of print is now always a valid journal (fixes [#465](https://github.com/simonmichael/hledger/issues/465)) (Mykola Orliuk).
+
+print now tries to preserves the format of implicit/explicit balancing
+amounts and prices, by default. To print with all amounts explicit,
+use the new `--explicit/-x` flag (fixes [#442](https://github.com/simonmichael/hledger/issues/442)). (Mykola Orliuk)
+    
+Don't lose the commodity of zero amounts/zero balance assertions (fixes [#475](https://github.com/simonmichael/hledger/issues/475)) (Mykola Orliuk)
+
+#### Misc
+
+Fix a regression in the readability of option parsing errors ([#478](https://github.com/simonmichael/hledger/issues/478)) (Hans-Peter Deifel)
+
+Fix an example in Cli/Main.hs (Steven R. Baker)
+
+Allow megaparsec 5.2 ([#503](https://github.com/simonmichael/hledger/issues/503))
+
+### hledger-ui 1.2
+
+Fix a pattern match failure when pressing E on the transaction screen (fixes [#508](https://github.com/simonmichael/hledger/issues/508))
+
+Accounts with ? in name had empty registers (fixes [#498](https://github.com/simonmichael/hledger/issues/498)) (Bryan Richter)
+
+Allow brick 0.16 (Joshua Chia) and brick 0.17/vty 0.15 (Peter Simons)
+
+Allow megaparsec 5.2 (fixes [#503](https://github.com/simonmichael/hledger/issues/503))
+
+Allow text-zipper 0.10
+
+### hledger-web 1.2
+
+Accounts with ? in name had empty registers (fixes [#498](https://github.com/simonmichael/hledger/issues/498)) (Bryan Richter)
+
+Allow megaparsec 5.2 (fixes [#503](https://github.com/simonmichael/hledger/issues/503))
+
+<!-- ### hledger-api 1.2 -->
+
+
+
+## 2016/12/31 hledger 1.1
+
+***more robust file format detection,
+integration of WIP ledger4 parser,
+balance assignments,
+hledger-ui --watch,
+hledger-iadd integration,
+bugfixes
+***
+
+<!-- ([announcement](http://thread.gmane.org/gmane.comp.finance.ledger.hledger/1267)) -->
+<!-- ([announcement](https://groups.google.com/d/topic/hledger/WgdTy3-a6sc/discussion))  -->
+
+Release contributors:
+Simon Michael, Johannes Gerer, Mykola Orliuk, Shubham Lagwankar.
+
+  [project-wide](#project-wide-changes-for-1.1)
+| [hledger-lib](#hledger-lib-1.1)
+| [hledger](#hledger-1.1-1)
+| [hledger-ui](#hledger-ui-1.1)
+| [hledger-web](#hledger-web-1.1)
+| [hledger-api](#hledger-api-1.1)
+
+### project-wide changes for 1.1
+
+#### misc
+
+-   don't show stack trace details in errors
+
+-   more predictable [file format detection](/hledger.html#input-files)
+    
+    When we don't recognise a file's extension, instead of choosing a subset of
+    readers to try based on content sniffing, now we just try them all.
+    Also, this can be overridden by prepending the reader name and a
+    colon to the file path (eg timedot:file.dat, csv:-).
+
+-   avoid creating junk CSV rules files when trying alternate readers.
+    We now create it only after successfully reading a file as CSV.
+
+-   improvements to [-B](/journal.html#transaction-prices) and [-V](/hledger.html#market-value) docs: clearer descriptions, more linkage ([#403](http://bugs.hledger.org/403))
+
+### hledger-lib 1.1
+
+#### journal format
+
+-   [balance assignments](/journal.html#balance-assignments) are now supported ([#438](http://bugs.hledger.org/438), [#129](http://bugs.hledger.org/129), [#157](http://bugs.hledger.org/157), [#288](http://bugs.hledger.org/288))
+
+    This feature also brings a slight performance drop (~5%);
+    optimisations welcome.
+
+-   also recognise `*.hledger` files as hledger journal format
+
+#### ledger format
+
+-   use ledger-parse from the ledger4 project as an alternate reader for C++ Ledger journals
+    
+    The idea is that some day we might get better compatibility with Ledger files this way.
+    Right now this reader is not very useful and will be used only if you explicitly select it with a `ledger:` prefix.
+    It parses transaction dates, descriptions, accounts and amounts, and ignores everything else.
+    Amount parsing is delegated to hledger's journal parser, and malformed amounts might be silently ignored.
+
+    This adds at least some of the following as new dependencies for hledger-lib:
+    parsers, parsec, attoparsec, trifecta.
+
+#### misc
+
+-   update base lower bound to enforce GHC 7.10+
+    
+    hledger-lib had a valid install plan with GHC 7.8, but currently requires GHC 7.10 to compile.
+    Now we require base 4.8+ everywhere to ensure the right GHC version at the start.
+    
+-   Hledger.Read api cleanups
+
+-   rename dbgIO to dbg0IO, consistent with dbg0, and document a bug in dbg*IO
+
+-   make readJournalFiles [f] equivalent to readJournalFile f ([#437](http://bugs.hledger.org/437))
+
+-   more general parser types enabling reuse outside of IO ([#439](http://bugs.hledger.org/439))
+
+### hledger 1.1
+
+#### balance
+
+-   with -V, don't ignore market prices in the future ([#453](http://bugs.hledger.org/453), [#403](http://bugs.hledger.org/403))
+
+-   with -V and multiple same-date market prices, use the last parsed not the highest price ([#403](http://bugs.hledger.org/403))
+
+#### misc
+
+-   fix non-existent "oldtime" dependency ([#431](http://bugs.hledger.org/431))
+
+-   [hledger-equity.hs](https://github.com/simonmichael/hledger/blob/master/bin/hledger-equity.hs) now generates valid journal format when there are multiple commodities
+
+### hledger-ui 1.1
+
+-   with [--watch](/hledger-ui.html#options), the display updates automatically to show file or date changes
+
+    hledger-ui --watch will reload data when the journal file (or any included file) changes.
+    Also, when viewing a current standard period (ie this day/week/month/quarter/year),
+    the period will move as needed to track the current system date.
+
+-   the [--change](/hledger-ui.html#options) flag shows period changes at startup instead of historical ending balances
+
+-   the A key runs the hledger-iadd tool, if installed
+
+-   always reload when g is pressed
+
+    Previously it would check the modification time and reload only if
+    it looked newer than the last reload.
+
+-   mark hledger-ui as "stable"
+
+-   allow brick 0.15, vty 5.14, text-zipper 0.9
+
+### hledger-web 1.1
+
+-   add [--host](/hledger-web.html#options) option ([#429](http://bugs.hledger.org/429))
+    
+    This came up in the context of Docker, but it seems it wasn't
+    possible for hledger-web to serve remote clients directly (without
+    a proxy) because of 127.0.0.1 being hardcoded. That can now be
+    changed with --host=IPADDR. Also, the default base url uses this
+    address rather than a hard-coded "localhost".
+    
+-   rename --server to --serve
+
+    The --server flag sounded too close in meaning to --host so
+    I've renamed it to --serve. The old spelling is still accepted,
+    but deprecated and will be removed in the next release.
+
+### hledger-api 1.1
+
+-   serves on 127.0.0.1 by default, [--host](/hledger-api.html#options) option added ([#432](http://bugs.hledger.org/432))
+    
+    Consistent with hledger-web: serves only local requests by default,
+    use --host=IPADDR to change this.
+
+-   fixed the version string in command-line help and swagger info
+
 
 
 ## 2016/10/26 hledger 1.0
@@ -70,14 +1862,14 @@ Simon Michael, Dominik Süß, Thomas R. Koll, Moritz Kiefer,
 jungle-boogie, Sergei Trofimovich, Malte Brandy, Sam Doshi, 
 Mitchell Rosen, Hans-Peter Deifel, Brian Scott, and Andrew Jones.
 
-  [project-wide](#project-wide-changes)
+  [project-wide](#project-wide-changes-for-1.0)
 | [hledger-lib](#hledger-lib-1.0)
 | [hledger](#hledger-1.0-1)
 | [hledger-ui](#hledger-ui-1.0)
 | [hledger-web](#hledger-web-1.0)
 | [hledger-api](#hledger-api-1.0)
 
-### project-wide changes
+### project-wide changes for 1.0
 
 #### misc
 
@@ -98,7 +1890,7 @@ Mitchell Rosen, Hans-Peter Deifel, Brian Scott, and Andrew Jones.
 
 -   tools/simplebench has been spun off as the [quickbench](http://hackage.haskell.org/package/quickbench) package.
 
--   add Appveyor CI builds, provide [more up-to-date Windows binaries](http://hledger.org/developer-guide.html#quick-links)
+-   add Appveyor CI builds, provide more up-to-date Windows binaries
 
 -   extra: add a bunch of CSV rules examples
 

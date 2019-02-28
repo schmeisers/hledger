@@ -1,22 +1,23 @@
 # 1. all data files on the command line should be read
 hledger inc -f personal.journal -f business.journal
 >>>
-Income Statement
+Income Statement 2014/01/01-2014/01/02
 
-Revenues:
---------------------
-                   0
-
-Expenses:
-                  $2  expenses
-                  $1    food
-                  $1    office supplies
---------------------
-                  $2
-
-Total:
---------------------
-                  $2
+                          || 2014/01/01-2014/01/02 
+==========================++=======================
+ Revenues                 ||                       
+--------------------------++-----------------------
+--------------------------++-----------------------
+                          ||                       
+==========================++=======================
+ Expenses                 ||                       
+--------------------------++-----------------------
+ expenses:food            ||                    $1 
+ expenses:office supplies ||                    $1 
+--------------------------++-----------------------
+                          ||                    $2 
+==========================++=======================
+ Net:                     ||                   $-2 
 >>>2
 >>>=0
 
@@ -24,16 +25,16 @@ Total:
 hledger print -f personal.journal -f business.journal -f alias.journal -f personal.journal
 >>>
 2014/01/01
-    expenses:office supplies            $1
-    assets:business checking           $-1
+    expenses:office supplies              $1
+    assets:business checking
 
 2014/01/02
-    expenses:food            $1
-    assets:cash             $-1
+    expenses:food              $1
+    assets:cash
 
 2014/01/02
-    expenses:food            $1
-    assets:cash             $-1
+    expenses:food              $1
+    assets:cash
 
 >>>2
 >>>=0
@@ -46,14 +47,22 @@ hledger print -f personal.journal -f business.journal -f alias.journal -f person
 hledger print -f personal.journal -f ../journal/a.timeclock -f ../journal/b.timedot
 >>>
 2014/01/02
-    expenses:food            $1
-    assets:cash             $-1
+    expenses:food              $1
+    assets:cash
 
 2016/01/01 * 12:00-16:00
-    (a:aa)         4.00h
+    (a:aa)           4.00h
 
 2016/01/01 *
-    (b.bb)          1.00
+    (b.bb)            1.00
 
+>>>2
+>>>=0
+
+# 4. same-date transactions in different files are shown in the right order
+hledger -f a.j -f b.j reg
+>>>
+2018/01/01 a1                   (a)                              1             1
+2018/01/01 b1                   (b)                              1             2
 >>>2
 >>>=0

@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell, OverloadedStrings, PackageImports #-}
 {-|
 
 Embedded documentation files in various formats, and helpers for viewing them.
@@ -16,88 +16,102 @@ module Hledger.Cli.DocFiles (
   ,printHelpForTopic
   ,runManForTopic
   ,runInfoForTopic
+  ,runPagerForTopic
 
   ) where
 
 import Prelude ()
-import Prelude.Compat
-import Data.FileEmbed
+import "base-compat-batteries" Prelude.Compat
+import Data.ByteString (ByteString)
+import qualified Data.ByteString.Char8 as BC
 import Data.String
 import System.IO
 import System.IO.Temp
 import System.Process
 
-import Hledger.Utils (first3, second3, third3)
+import Hledger.Utils (first3, second3, third3, embedFileRelative)
 
 type Topic = String
 
-docFiles :: IsString a => [(Topic, (a, a, a))]
+-- | These are all the main hledger manuals, in man, txt, and info formats.
+-- Only files under the current package directory can be embedded,
+-- so most of these are symlinked here from the other package directories.
+docFiles :: [(Topic, (ByteString, ByteString, ByteString))]
 docFiles = [
-   ("cli",
-    ($(makeRelativeToProject "doc/hledger.1" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/hledger.1.txt" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/hledger.1.info" >>= embedStringFile)
+   ("hledger",
+    ($(embedFileRelative "embeddedfiles/hledger.1")
+    ,$(embedFileRelative "embeddedfiles/hledger.txt")
+    ,$(embedFileRelative "embeddedfiles/hledger.info")
     ))
-  ,("ui",
-    ($(makeRelativeToProject "doc/other/hledger-ui.1" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger-ui.1.txt" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger-ui.1.info" >>= embedStringFile)
+  ,("hledger-ui",
+    ($(embedFileRelative "embeddedfiles/hledger-ui.1")
+    ,$(embedFileRelative "embeddedfiles/hledger-ui.txt")
+    ,$(embedFileRelative "embeddedfiles/hledger-ui.info")
     ))
-  ,("web",
-    ($(makeRelativeToProject "doc/other/hledger-web.1" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger-web.1.txt" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger-web.1.info" >>= embedStringFile)
+  ,("hledger-web",
+    ($(embedFileRelative "embeddedfiles/hledger-web.1")
+    ,$(embedFileRelative "embeddedfiles/hledger-web.txt")
+    ,$(embedFileRelative "embeddedfiles/hledger-web.info")
     ))
-  ,("api",
-    ($(makeRelativeToProject "doc/other/hledger-api.1" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger-api.1.txt" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger-api.1.info" >>= embedStringFile)
+  ,("hledger-api",
+    ($(embedFileRelative "embeddedfiles/hledger-api.1")
+    ,$(embedFileRelative "embeddedfiles/hledger-api.txt")
+    ,$(embedFileRelative "embeddedfiles/hledger-api.info")
     ))
   ,("journal",
-    ($(makeRelativeToProject "doc/other/hledger_journal.5" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger_journal.5.txt" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger_journal.5.info" >>= embedStringFile)
+    ($(embedFileRelative "embeddedfiles/hledger_journal.5")
+    ,$(embedFileRelative "embeddedfiles/hledger_journal.txt")
+    ,$(embedFileRelative "embeddedfiles/hledger_journal.info")
     ))
   ,("csv",
-    ($(makeRelativeToProject "doc/other/hledger_csv.5" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger_csv.5.txt" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger_csv.5.info" >>= embedStringFile)
+    ($(embedFileRelative "embeddedfiles/hledger_csv.5")
+    ,$(embedFileRelative "embeddedfiles/hledger_csv.txt")
+    ,$(embedFileRelative "embeddedfiles/hledger_csv.info")
     ))
   ,("timeclock",
-    ($(makeRelativeToProject "doc/other/hledger_timeclock.5" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger_timeclock.5.txt" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger_timeclock.5.info" >>= embedStringFile)
+    ($(embedFileRelative "embeddedfiles/hledger_timeclock.5")
+    ,$(embedFileRelative "embeddedfiles/hledger_timeclock.txt")
+    ,$(embedFileRelative "embeddedfiles/hledger_timeclock.info")
     ))
   ,("timedot",
-    ($(makeRelativeToProject "doc/other/hledger_timedot.5" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger_timedot.5.txt" >>= embedStringFile)
-    ,$(makeRelativeToProject "doc/other/hledger_timedot.5.info" >>= embedStringFile)
+    ($(embedFileRelative "embeddedfiles/hledger_timedot.5")
+    ,$(embedFileRelative "embeddedfiles/hledger_timedot.txt")
+    ,$(embedFileRelative "embeddedfiles/hledger_timedot.info")
     ))
   ]
 
 docTopics :: [Topic]
 docTopics = map fst docFiles
 
-lookupDocTxt :: IsString a => Topic -> a
+lookupDocTxt :: Topic -> ByteString
 lookupDocTxt name =
   maybe (fromString $ "No text manual found for topic: "++name) second3 $ lookup name docFiles
 
-lookupDocNroff :: IsString a => Topic -> a
+lookupDocNroff :: Topic -> ByteString
 lookupDocNroff name =
   maybe (fromString $ "No man page found for topic: "++name) first3 $ lookup name docFiles
 
-lookupDocInfo :: IsString a => Topic -> a
+lookupDocInfo :: Topic -> ByteString
 lookupDocInfo name =
   maybe (fromString $ "No info manual found for topic: "++name) third3 $ lookup name docFiles
 
 printHelpForTopic :: Topic -> IO ()
 printHelpForTopic t =
-  putStrLn $ lookupDocTxt t
+  BC.putStr (lookupDocTxt t)
+
+runPagerForTopic :: FilePath -> Topic -> IO ()
+runPagerForTopic exe t = do
+  (Just inp, _, _, ph) <- createProcess (proc exe []){
+    std_in=CreatePipe
+    }
+  BC.hPutStrLn inp (lookupDocTxt t)
+  _ <- waitForProcess ph
+  return ()
 
 runManForTopic :: Topic -> IO ()
 runManForTopic t =
   withSystemTempFile ("hledger-"++t++".nroff") $ \f h -> do
-    hPutStrLn h $ lookupDocNroff t
+    BC.hPutStrLn h $ lookupDocNroff t
     hClose h
      -- the temp file path will presumably have a slash in it, so man should read it
     callCommand $ "man " ++ f
@@ -105,7 +119,7 @@ runManForTopic t =
 runInfoForTopic :: Topic -> IO ()
 runInfoForTopic t =
   withSystemTempFile ("hledger-"++t++".info") $ \f h -> do
-    hPutStrLn h $ lookupDocInfo t
+    BC.hPutStrLn h $ lookupDocInfo t
     hClose h
     callCommand $ "info " ++ f
 

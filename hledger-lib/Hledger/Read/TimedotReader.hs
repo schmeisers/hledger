@@ -5,7 +5,9 @@ Example:
 
 @
 #DATE
-#ACCT DOTS  # Each dot represents 15m, spaces are ignored
+#ACCT  DOTS  # Each dot represents 15m, spaces are ignored
+#ACCT  8    # numbers with or without a following h represent hours
+#ACCT  5m   # numbers followed by m represent minutes
 
 # on 2/1, 1h was spent on FOSS haskell work, 0.25h on research, etc.
 2/1
@@ -21,19 +23,17 @@ inc.client1   .... .... ..
 
 -}
 
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, PackageImports #-}
 
 module Hledger.Read.TimedotReader (
   -- * Reader
   reader,
   -- * Misc other exports
   timedotfilep,
-  -- * Tests
-  tests_Hledger_Read_TimedotReader
 )
 where
 import Prelude ()
-import Prelude.Compat
+import "base-compat-batteries" Prelude.Compat
 import Control.Monad
 import Control.Monad.Except (ExceptT)
 import Control.Monad.State.Strict
@@ -41,18 +41,18 @@ import Data.Char (isSpace)
 import Data.List (foldl')
 import Data.Maybe
 import Data.Text (Text)
-import Test.HUnit
 import Text.Megaparsec hiding (parse)
+import Text.Megaparsec.Char
 
 import Hledger.Data
 import Hledger.Read.Common
-import Hledger.Utils hiding (ptrace)
+import Hledger.Utils hiding (traceParse)
 
 -- easier to toggle this here sometimes
--- import qualified Hledger.Utils (ptrace)
--- ptrace = Hledger.Utils.ptrace
-ptrace :: Monad m => a -> m a
-ptrace = return
+-- import qualified Hledger.Utils (parsertrace)
+-- parsertrace = Hledger.Utils.parsertrace
+traceParse :: Monad m => a -> m a
+traceParse = return
 
 reader :: Reader
 reader = Reader
@@ -63,19 +63,19 @@ reader = Reader
   }
 
 -- | Parse and post-process a "Journal" from the timedot format, or give an error.
-parse :: Maybe FilePath -> Bool -> FilePath -> Text -> ExceptT String IO Journal
-parse _ = parseAndFinaliseJournal timedotfilep
+parse :: InputOpts -> FilePath -> Text -> ExceptT String IO Journal
+parse = parseAndFinaliseJournal' timedotfilep
 
-timedotfilep :: JournalStateParser m ParsedJournal
+timedotfilep :: JournalParser m ParsedJournal
 timedotfilep = do many timedotfileitemp
                   eof
                   get
     where
-      timedotfileitemp :: JournalStateParser m ()
+      timedotfileitemp :: JournalParser m ()
       timedotfileitemp = do
-        ptrace "timedotfileitemp"
+        traceParse "timedotfileitemp"
         choice [
-          void emptyorcommentlinep
+          void $ lift emptyorcommentlinep
          ,timedotdayp >>= \ts -> modify' (addTransactions ts)
          ] <?> "timedot day entry, or default year or comment line or blank line"
 
@@ -89,11 +89,11 @@ addTransactions ts j = foldl' (flip ($)) j (map addTransaction ts)
 -- biz.research .
 -- inc.client1  .... .... .... .... .... ....
 -- @
-timedotdayp :: JournalStateParser m [Transaction]
+timedotdayp :: JournalParser m [Transaction]
 timedotdayp = do
-  ptrace " timedotdayp"
+  traceParse " timedotdayp"
   d <- datep <* lift eolof
-  es <- catMaybes <$> many (const Nothing <$> try emptyorcommentlinep <|>
+  es <- catMaybes <$> many (const Nothing <$> try (lift emptyorcommentlinep) <|>
                             Just <$> (notFollowedBy datep >> timedotentryp))
   return $ map (\t -> t{tdate=d}) es -- <$> many timedotentryp
 
@@ -101,17 +101,17 @@ timedotdayp = do
 -- @
 -- fos.haskell  .... ..
 -- @
-timedotentryp :: JournalStateParser m Transaction
+timedotentryp :: JournalParser m Transaction
 timedotentryp = do
-  ptrace "  timedotentryp"
-  pos <- genericSourcePos <$> getPosition
-  lift (many spacenonewline)
+  traceParse "  timedotentryp"
+  pos <- genericSourcePos <$> getSourcePos
+  lift (skipMany spacenonewline)
   a <- modifiedaccountnamep
-  lift (many spacenonewline)
+  lift (skipMany spacenonewline)
   hours <-
-    try (followingcommentp >> return 0)
+    try (lift followingcommentp >> return 0)
     <|> (timedotdurationp <*
-         (try followingcommentp <|> (newline >> return "")))
+         (try (lift followingcommentp) <|> (newline >> return "")))
   let t = nulltransaction{
         tsourcepos = pos,
         tstatus    = Cleared,
@@ -125,30 +125,48 @@ timedotentryp = do
         }
   return t
 
-timedotdurationp :: JournalStateParser m Quantity
-timedotdurationp = try timedotnumberp <|> timedotdotsp
+timedotdurationp :: JournalParser m Quantity
+timedotdurationp = try timedotnumericp <|> timedotdotsp
 
--- | Parse a duration written as a decimal number of hours (optionally followed by the letter h).
+-- | Parse a duration of seconds, minutes, hours, days, weeks, months or years,
+-- written as a decimal number followed by s, m, h, d, w, mo or y, assuming h
+-- if there is no unit. Returns the duration as hours, assuming
+-- 1m = 60s, 1h = 60m, 1d = 24h, 1w = 7d, 1mo = 30d, 1y=365d.
 -- @
+-- 1.5
 -- 1.5h
+-- 90m
 -- @
-timedotnumberp :: JournalStateParser m Quantity
-timedotnumberp = do
-   (q, _, _, _) <- lift numberp
-   lift (many spacenonewline)
-   optional $ char 'h'
-   lift (many spacenonewline)
-   return q
+timedotnumericp :: JournalParser m Quantity
+timedotnumericp = do
+  (q, _, _, _) <- lift $ numberp Nothing
+  msymbol <- optional $ choice $ map (string . fst) timeUnits
+  lift (skipMany spacenonewline)
+  let q' = 
+        case msymbol of
+          Nothing  -> q
+          Just sym ->
+            case lookup sym timeUnits of
+              Just mult -> q * mult  
+              Nothing   -> q  -- shouldn't happen.. ignore
+  return q'
+
+-- (symbol, equivalent in hours). 
+timeUnits =
+  [("s",2.777777777777778e-4)
+  ,("mo",5040) -- before "m"
+  ,("m",1.6666666666666666e-2)
+  ,("h",1)
+  ,("d",24)
+  ,("w",168)
+  ,("y",61320)
+  ]
 
 -- | Parse a quantity written as a line of dots, each representing 0.25.
 -- @
 -- .... ..
 -- @
-timedotdotsp :: JournalStateParser m Quantity
+timedotdotsp :: JournalParser m Quantity
 timedotdotsp = do
   dots <- filter (not.isSpace) <$> many (oneOf (". " :: [Char]))
   return $ (/4) $ fromIntegral $ length dots
-
-tests_Hledger_Read_TimedotReader = TestList [
- ]
-

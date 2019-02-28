@@ -8,6 +8,7 @@ hledger is brought to you by:
 -   Roman Cheplyaka - "chart" command, "add" command improvements
 -   Michael Snoyman - some additions to the Yesod web interface
 -   Marko Kocić - hlint cleanup
+-   Samuel May - exact assertions
 
 Developers who have not yet signed the contributor agreement:
 
@@ -47,7 +48,7 @@ doing you promise that all of your commits to hledger:
     of your knowledge
 
 -   are released under the hledger project's
-    [license](http://joyful.com/repos/hledger/LICENSE); or are released
+    [license](https://github.com/simonmichael/hledger/blob/master/LICENSE); or are released
     under another compatible license (in which case this must be clearly
     noted); or are public domain
 

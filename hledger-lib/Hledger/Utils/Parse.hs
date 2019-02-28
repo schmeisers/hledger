@@ -1,71 +1,130 @@
-{-# LANGUAGE FlexibleContexts, TypeFamilies #-}
-module Hledger.Utils.Parse where
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeFamilies #-}
 
-import Control.Monad.Except
+module Hledger.Utils.Parse (
+  SimpleStringParser,
+  SimpleTextParser,
+  TextParser,
+  JournalParser,
+  ErroringJournalParser,
+
+  choice',
+  choiceInState,
+  surroundedBy,
+  parsewith,
+  parsewithString,
+  parseWithState,
+  parseWithState',
+  fromparse,
+  parseerror,
+  showDateParseError,
+  nonspace,
+  isNonNewlineSpace,
+  spacenonewline,
+  restofline,
+  eolof,
+
+  -- * re-exports
+  CustomErr
+)
+where
+
+import Control.Monad.Except (ExceptT)
+import Control.Monad.State.Strict (StateT, evalStateT)
 import Data.Char
+import Data.Functor.Identity (Identity(..))
 import Data.List
 import Data.Text (Text)
-import Text.Megaparsec hiding (State)
-import Data.Functor.Identity (Identity(..))
+import Text.Megaparsec
+import Text.Megaparsec.Char
+import Text.Megaparsec.Custom
 import Text.Printf
-
-import Control.Monad.State.Strict (StateT, evalStateT)
 
 import Hledger.Data.Types
 import Hledger.Utils.UTF8IOCompat (error')
 
--- | A parser of strict text with generic user state, monad and return type.
-type TextParser m a = ParsecT Dec Text m a
+-- | A parser of string to some type.
+type SimpleStringParser a = Parsec CustomErr String a
 
-type JournalStateParser m a = StateT Journal (ParsecT Dec Text m) a
+-- | A parser of strict text to some type.
+type SimpleTextParser = Parsec CustomErr Text  -- XXX an "a" argument breaks the CsvRulesParser declaration somehow
 
-type JournalParser a = StateT Journal (ParsecT Dec Text Identity) a
+-- | A parser of text in some monad.
+type TextParser m a = ParsecT CustomErr Text m a
 
--- | A journal parser that runs in IO and can throw an error mid-parse.
-type ErroringJournalParser m a = StateT Journal (ParsecT Dec Text (ExceptT String m)) a
+-- | A parser of text in some monad, with a journal as state.
+type JournalParser m a = StateT Journal (ParsecT CustomErr Text m) a
+
+-- | A parser of text in some monad, with a journal as state, that can throw a
+-- "final" parse error that does not backtrack.
+type ErroringJournalParser m a =
+  StateT Journal (ParsecT CustomErr Text (ExceptT FinalParseError m)) a
 
 -- | Backtracking choice, use this when alternatives share a prefix.
 -- Consumes no input if all choices fail.
 choice' :: [TextParser m a] -> TextParser m a
-choice' = choice . map Text.Megaparsec.try
+choice' = choice . map try
 
 -- | Backtracking choice, use this when alternatives share a prefix.
 -- Consumes no input if all choices fail.
-choiceInState :: [StateT s (ParsecT Dec Text m) a] -> StateT s (ParsecT Dec Text m) a
-choiceInState = choice . map Text.Megaparsec.try
+choiceInState :: [StateT s (ParsecT CustomErr Text m) a] -> StateT s (ParsecT CustomErr Text m) a
+choiceInState = choice . map try
 
-parsewith :: Parsec e Text a -> Text -> Either (ParseError Char e) a
+surroundedBy :: Applicative m => m openclose -> m a -> m a
+surroundedBy p = between p p
+
+parsewith :: Parsec e Text a -> Text -> Either (ParseErrorBundle Text e) a
 parsewith p = runParser p ""
 
-parsewithString :: Parsec e String a -> String -> Either (ParseError Char e) a
+parsewithString
+  :: Parsec e String a -> String -> Either (ParseErrorBundle String e) a
 parsewithString p = runParser p ""
 
-parseWithState :: Monad m => st -> StateT st (ParsecT Dec Text m) a -> Text -> m (Either (ParseError Char Dec) a)
+-- | Run a stateful parser with some initial state on a text.
+-- See also: runTextParser, runJournalParser.
+parseWithState
+  :: Monad m
+  => st
+  -> StateT st (ParsecT CustomErr Text m) a
+  -> Text
+  -> m (Either (ParseErrorBundle Text CustomErr) a)
 parseWithState ctx p s = runParserT (evalStateT p ctx) "" s
 
-parseWithState' :: (Stream s, ErrorComponent e) => st -> StateT st (ParsecT e s Identity) a -> s -> (Either (ParseError (Token s) e) a)
+parseWithState'
+  :: (Stream s)
+  => st
+  -> StateT st (ParsecT e s Identity) a
+  -> s
+  -> (Either (ParseErrorBundle s e) a)
 parseWithState' ctx p s = runParser (evalStateT p ctx) "" s
 
-fromparse :: (Show t, Show e) => Either (ParseError t e) a -> a
+fromparse
+  :: (Show t, Show (Token t), Show e) => Either (ParseErrorBundle t e) a -> a
 fromparse = either parseerror id
 
-parseerror :: (Show t, Show e) => ParseError t e -> a
+parseerror :: (Show t, Show (Token t), Show e) => ParseErrorBundle t e -> a
 parseerror e = error' $ showParseError e
 
-showParseError :: (Show t, Show e) => ParseError t e -> String
+showParseError
+  :: (Show t, Show (Token t), Show e)
+  => ParseErrorBundle t e -> String
 showParseError e = "parse error at " ++ show e
 
-showDateParseError :: (Show t, Show e) => ParseError t e -> String
+showDateParseError
+  :: (Show t, Show (Token t), Show e) => ParseErrorBundle t e -> String
 showDateParseError e = printf "date parse error (%s)" (intercalate ", " $ tail $ lines $ show e)
 
 nonspace :: TextParser m Char
 nonspace = satisfy (not . isSpace)
 
-spacenonewline :: (Stream s, Char ~ Token s) => ParsecT Dec s m Char
-spacenonewline = satisfy (`elem` " \v\f\t")
+isNonNewlineSpace :: Char -> Bool
+isNonNewlineSpace c = c /= '\n' && isSpace c
+
+spacenonewline :: (Stream s, Char ~ Token s) => ParsecT CustomErr s m Char
+spacenonewline = satisfy isNonNewlineSpace
 
 restofline :: TextParser m String
-restofline = anyChar `manyTill` newline
+restofline = anySingle `manyTill` newline
 
 eolof :: TextParser m ()
 eolof = (newline >> return ()) <|> eof

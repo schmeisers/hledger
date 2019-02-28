@@ -7,15 +7,31 @@ balances, and postings in each account.
 
 -}
 
-module Hledger.Data.Ledger
+{-# LANGUAGE OverloadedStrings #-}
+
+module Hledger.Data.Ledger (
+   nullledger
+  ,ledgerFromJournal
+  ,ledgerAccountNames
+  ,ledgerAccount
+  ,ledgerRootAccount
+  ,ledgerTopAccounts
+  ,ledgerLeafAccounts
+  ,ledgerAccountsMatching
+  ,ledgerPostings
+  ,ledgerDateSpan
+  ,ledgerCommodities
+  ,tests_Ledger
+)
 where
+
 import qualified Data.Map as M
 -- import Data.Text (Text)
 import qualified Data.Text as T
 import Safe (headDef)
-import Test.HUnit
 import Text.Printf
 
+import Hledger.Utils.Test 
 import Hledger.Data.Types
 import Hledger.Data.Account
 import Hledger.Data.Journal
@@ -26,7 +42,7 @@ import Hledger.Query
 instance Show Ledger where
     show l = printf "Ledger with %d transactions, %d accounts\n" --"%s"
              (length (jtxns $ ljournal l) +
-              length (jmodifiertxns $ ljournal l) +
+              length (jtxnmodifiers $ ljournal l) +
               length (jperiodictxns $ ljournal l))
              (length $ ledgerAccountNames l)
              -- (showtree $ ledgerAccountNameTree l)
@@ -89,13 +105,15 @@ ledgerDateSpan = postingsDateSpan . ledgerPostings
 ledgerCommodities :: Ledger -> [CommoditySymbol]
 ledgerCommodities = M.keys . jinferredcommodities . ljournal
 
+-- tests
 
-tests_ledgerFromJournal = [
- "ledgerFromJournal" ~: do
-  assertEqual "" (0) (length $ ledgerPostings $ ledgerFromJournal Any nulljournal)
-  assertEqual "" (11) (length $ ledgerPostings $ ledgerFromJournal Any samplejournal)
-  assertEqual "" (6) (length $ ledgerPostings $ ledgerFromJournal (Depth 2) samplejournal)
- ]
-
-tests_Hledger_Data_Ledger = TestList $
-    tests_ledgerFromJournal
+tests_Ledger =
+  tests
+    "Ledger"
+    [ tests
+        "ledgerFromJournal"
+        [ length (ledgerPostings $ ledgerFromJournal Any nulljournal) `is` 0
+        , length (ledgerPostings $ ledgerFromJournal Any samplejournal) `is` 13
+        , length (ledgerPostings $ ledgerFromJournal (Depth 2) samplejournal) `is` 7
+        ]
+    ]

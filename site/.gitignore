@@ -1,4 +1,3 @@
-hakyll-std
 _cache
 _site
 files/downloads
@@ -12,4 +11,6 @@ journal.md
 timeclock.md
 timedot.md
 manual.md
+cookbook.md
 [0-9].*
+.snapshot

@@ -2,39 +2,40 @@
 -- There may be better alternatives out there.
 
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE CPP #-}
 
 module Hledger.Utils.Text
- --  (
+  (
  -- -- * misc
  -- lowercase,
  -- uppercase,
  -- underline,
  -- stripbrackets,
- -- unbracket,
+  textUnbracket,
  -- -- quoting
- -- quoteIfSpaced,
+  quoteIfSpaced,
  -- quoteIfNeeded,
  -- singleQuoteIfNeeded,
  -- -- quotechars,
  -- -- whitespacechars,
- -- escapeDoubleQuotes,
+  escapeDoubleQuotes,
  -- escapeSingleQuotes,
  -- escapeQuotes,
  -- words',
  -- unwords',
- -- stripquotes,
+  stripquotes,
  -- isSingleQuoted,
  -- isDoubleQuoted,
  -- -- * single-line layout
- -- strip,
- -- lstrip,
- -- rstrip,
+  textstrip,
+  textlstrip,
+  textrstrip,
  -- chomp,
  -- elideLeft,
- -- elideRight,
+  textElideRight,
  -- formatString,
  -- -- * multi-line layout
- -- concatTopPadded,
+  textConcatTopPadded,
  -- concatBottomPadded,
  -- concatOneLine,
  -- vConcatLeftAligned,
@@ -45,19 +46,24 @@ module Hledger.Utils.Text
  -- padright,
  -- cliptopleft,
  -- fitto,
+  fitText,
  -- -- * wide-character-aware layout
- -- strWidth,
- -- textTakeWidth,
+  textWidth,
+  textTakeWidth,
  -- fitString,
  -- fitStringMulti,
- -- padLeftWide,
- -- padRightWide
- -- )
+  textPadLeftWide,
+  textPadRightWide,
+  -- -- * tests
+  tests_Text
+  )
 where
 
 -- import Data.Char
 import Data.List
+#if !(MIN_VERSION_base(4,11,0))
 import Data.Monoid
+#endif
 import Data.Text (Text)
 import qualified Data.Text as T
 -- import Text.Parsec
@@ -66,6 +72,7 @@ import qualified Data.Text as T
 -- import Hledger.Utils.Parse
 -- import Hledger.Utils.Regex
 import Hledger.Utils.String (charWidth)
+import Hledger.Utils.Test
 
 -- lowercase, uppercase :: String -> String
 -- lowercase = map toLower
@@ -120,7 +127,7 @@ textElideRight width t =
 quoteIfSpaced :: T.Text -> T.Text
 quoteIfSpaced s | isSingleQuoted s || isDoubleQuoted s = s
                 | not $ any (`elem` (T.unpack s)) whitespacechars = s
-                | otherwise = "'"<>escapeSingleQuotes s<>"'"
+                | otherwise = quoteIfNeeded s
 
 -- -- | Wrap a string in double quotes, and \-prefix any embedded single
 -- -- quotes, if it contains whitespace and is not already single- or
@@ -132,9 +139,9 @@ quoteIfSpaced s | isSingleQuoted s || isDoubleQuoted s = s
 
 -- -- | Double-quote this string if it contains whitespace, single quotes
 -- -- or double-quotes, escaping the quotes as needed.
--- quoteIfNeeded :: T.Text -> T.Text
--- quoteIfNeeded s | any (`elem` T.unpack s) (quotechars++whitespacechars) = "\"" <> escapeDoubleQuotes s <> "\""
---                 | otherwise = s
+quoteIfNeeded :: T.Text -> T.Text
+quoteIfNeeded s | any (`elem` T.unpack s) (quotechars++whitespacechars) = "\"" <> escapeDoubleQuotes s <> "\""
+                | otherwise = s
 
 -- -- | Single-quote this string if it contains whitespace or double-quotes.
 -- -- No good for strings containing single quotes.
@@ -147,10 +154,10 @@ quotechars      = "'\""
 whitespacechars = " \t\n\r"
 
 escapeDoubleQuotes :: T.Text -> T.Text
-escapeDoubleQuotes = T.replace "\"" "\""
+escapeDoubleQuotes = T.replace "\"" "\\\""
 
-escapeSingleQuotes :: T.Text -> T.Text
-escapeSingleQuotes = T.replace "'" "\'"
+-- escapeSingleQuotes :: T.Text -> T.Text
+-- escapeSingleQuotes = T.replace "'" "\'"
 
 -- escapeQuotes :: String -> String
 -- escapeQuotes = regexReplace "([\"'])" "\\1"
@@ -291,7 +298,7 @@ difforzero a b = maximum [(a - b), 0]
 -- It clips and pads on the right when the fourth argument is true, otherwise on the left.
 -- It treats wide characters as double width.
 fitText :: Maybe Int -> Maybe Int -> Bool -> Bool -> Text -> Text
-fitText mminwidth mmaxwidth ellipsify rightside s = (clip . pad) s
+fitText mminwidth mmaxwidth ellipsify rightside = clip . pad
   where
     clip :: Text -> Text
     clip s =
@@ -412,3 +419,15 @@ textWidth s = maximum $ map (T.foldr (\a b -> charWidth a + b) 0) $ T.lines s
 --         | c >= '\x20000' && c <= '\x3FFFD' -> 2
 --         | otherwise                        -> 1
 
+
+tests_Text = tests "Text" [
+   tests "quoteIfSpaced" [
+     quoteIfSpaced "a'a" `is` "a'a"
+    ,quoteIfSpaced "a\"a" `is` "a\"a"              
+    ,quoteIfSpaced "a a" `is` "\"a a\""               
+    ,quoteIfSpaced "mimi's cafe" `is` "\"mimi's cafe\""       
+    ,quoteIfSpaced "\"alex\" cafe" `is` "\"\\\"alex\\\" cafe\""     
+    ,quoteIfSpaced "le'shan's cafe" `is` "\"le'shan's cafe\""    
+    ,quoteIfSpaced "\"be'any's\" cafe" `is` "\"\\\"be'any's\\\" cafe\"" 
+    ] 
+  ]

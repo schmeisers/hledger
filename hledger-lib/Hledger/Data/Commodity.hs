@@ -8,15 +8,17 @@ are thousands separated by comma, significant decimal places and so on.
 -}
 
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE CPP #-}
 
 module Hledger.Data.Commodity
 where
+import Data.Char (isDigit)
 import Data.List
 import Data.Maybe (fromMaybe)
+#if !(MIN_VERSION_base(4,11,0))
 import Data.Monoid
--- import Data.Text (Text)
+#endif
 import qualified Data.Text as T
-import Test.HUnit
 -- import qualified Data.Map as M
 
 import Hledger.Data.Types
@@ -24,9 +26,15 @@ import Hledger.Utils
 
 
 -- characters that may not be used in a non-quoted commodity symbol
-nonsimplecommoditychars = "0123456789-+.@;\n \"{}=" :: [Char]
+nonsimplecommoditychars = "0123456789-+.@*;\n \"{}=" :: String
 
-quoteCommoditySymbolIfNeeded s | any (`elem` nonsimplecommoditychars) (T.unpack s) = "\"" <> s <> "\""
+isNonsimpleCommodityChar :: Char -> Bool
+isNonsimpleCommodityChar c = isDigit c || c `textElem` otherChars
+ where
+   otherChars = "-+.@*;\n \"{}=" :: T.Text
+   textElem = T.any . (==)
+
+quoteCommoditySymbolIfNeeded s | T.any (isNonsimpleCommodityChar) s = "\"" <> s <> "\""
                                | otherwise = s
 
 commodity = ""
@@ -70,7 +78,4 @@ conversionRate _ _ = 1
 --     commoditymap = Map.fromList [(s, commoditieswithsymbol s) | s <- symbols]
 --     commoditieswithsymbol s = filter ((s==) . symbol) cs
 --     symbols = nub $ map symbol cs
-
-tests_Hledger_Data_Commodity = TestList [
- ]
 

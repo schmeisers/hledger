@@ -5,7 +5,7 @@ related utilities used by hledger commands.
 
 -}
 
-{-# LANGUAGE CPP, ScopedTypeVariables, DeriveDataTypeable, FlexibleContexts, TypeFamilies #-}
+{-# LANGUAGE CPP, ScopedTypeVariables, DeriveDataTypeable, FlexibleContexts, TypeFamilies, OverloadedStrings, PackageImports #-}
 
 module Hledger.Cli.CliOptions (
 
@@ -15,40 +15,45 @@ module Hledger.Cli.CliOptions (
   inputflags,
   reportflags,
   outputflags,
+  outputFormatFlag,
+  outputFileFlag,
   generalflagsgroup1,
   generalflagsgroup2,
   generalflagsgroup3,
   defMode,
   defCommandMode,
-  defAddonCommandMode,
+  addonCommandMode,
+  hledgerCommandMode,
   argsFlag,
   showModeUsage,
   withAliases,
+  likelyExecutablesInPath,
+  hledgerExecutablesInPath,
 
   -- * CLI options
   CliOpts(..),
   defcliopts,
-  getCliOpts,
+  getHledgerCliOpts,
   decodeRawOpts,
   rawOptsToCliOpts,
   checkCliOpts,
   outputFormats,
   defaultOutputFormat,
   defaultBalanceLineFormat,
+  CommandDoc,
 
   -- possibly these should move into argsToCliOpts
   -- * CLI option accessors
   -- | These do the extra processing required for some options.
-  aliasesFromOpts,
   journalFilePathFromOpts,
   rulesFilePathFromOpts,
   outputFileFromOpts,
   outputFormatFromOpts,
   defaultWidth,
   widthFromOpts,
+  replaceNumericFlags,
   -- | For register:
   registerWidthsFromOpts,
-  maybeAccountNameDrop,
   -- | For balance:
   lineFormatFromOpts,
 
@@ -56,26 +61,27 @@ module Hledger.Cli.CliOptions (
   hledgerAddons,
   topicForMode,
 
-  -- * Tests
-  tests_Hledger_Cli_CliOptions
-
+--  -- * Convenience re-exports
+--  module Data.String.Here,
+--  module System.Console.CmdArgs.Explicit,
 )
 where
 
 import Prelude ()
-import Prelude.Compat
+import "base-compat-batteries" Prelude.Compat
 import qualified Control.Exception as C
 import Control.Monad (when)
+import Data.Char
 import Data.Default
-#if !MIN_VERSION_base(4,8,0)
-import Data.Functor.Compat ((<$>))
-#endif
 import Data.Functor.Identity (Identity)
-import Data.List.Compat
+import "base-compat-batteries" Data.List.Compat
 import Data.List.Split (splitOneOf)
+import Data.Ord
 import Data.Maybe
+--import Data.String.Here
 -- import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Void (Void)
 import Safe
 import System.Console.CmdArgs hiding (Default,def)
 import System.Console.CmdArgs.Explicit
@@ -87,8 +93,8 @@ import System.Directory
 import System.Environment
 import System.Exit (exitSuccess)
 import System.FilePath
-import Test.HUnit
 import Text.Megaparsec
+import Text.Megaparsec.Char
 
 import Hledger
 import Hledger.Cli.DocFiles
@@ -100,10 +106,7 @@ import Hledger.Cli.Version
 -- | Common help flags: --help, --debug, --version...
 helpflags :: [Flag RawOpts]
 helpflags = [
-  flagNone ["h"]    (setboolopt "h")    "show general usage or (after COMMAND, the command's usage"
- ,flagNone ["help"] (setboolopt "help") "show the current program's manual as plain text (or after an add-on COMMAND, the add-on's manual)"
- ,flagNone ["man"]  (setboolopt "man")  "show the current program's manual with man"
- ,flagNone ["info"] (setboolopt "info") "show the current program's manual with info"
+  flagNone ["help","h"] (setboolopt "help") "show general usage (or after CMD, command usage)"
  -- ,flagNone ["browse-args"] (setboolopt "browse-args") "use a web UI to select options and build up a command line"
  ,flagReq  ["debug"]    (\s opts -> Right $ setopt "debug" s opts) "[N]" "show debug output (levels 1-9, default: 1)"
  ,flagNone ["version"] (setboolopt "version") "show version information"
@@ -116,11 +119,13 @@ detailedversionflag = flagNone ["version+"] (setboolopt "version+") "show versio
 -- | Common input-related flags: --file, --rules-file, --alias...
 inputflags :: [Flag RawOpts]
 inputflags = [
-  flagReq ["file","f"]  (\s opts -> Right $ setopt "file" s opts) "FILE" "use a different input file. For stdin, use -"
- ,flagReq ["rules-file"]  (\s opts -> Right $ setopt "rules-file" s opts) "RFILE" "CSV conversion rules file (default: FILE.rules)"
- ,flagReq ["alias"]  (\s opts -> Right $ setopt "alias" s opts)  "OLD=NEW" "display accounts named OLD as NEW"
- ,flagNone ["ignore-assertions","I"] (setboolopt "ignore-assertions") "ignore any balance assertions in the journal"
- ,flagReq ["pivot"]  (\s opts -> Right $ setopt "pivot" s opts)  "TAG" "Replace the accounts of postings with TAG by TAG:<value>"
+  flagReq  ["file","f"]      (\s opts -> Right $ setopt "file" s opts) "FILE" "use a different input file. For stdin, use - (default: $LEDGER_FILE or $HOME/.hledger.journal)"
+ ,flagReq  ["rules-file"]    (\s opts -> Right $ setopt "rules-file" s opts) "RFILE" "CSV conversion rules file (default: FILE.rules)"
+ ,flagReq  ["separator"]     (\s opts -> Right $ setopt "separator" s opts) "SEPARATOR" "CSV separator (default: ,)"
+ ,flagReq  ["alias"]         (\s opts -> Right $ setopt "alias" s opts)  "OLD=NEW" "rename accounts named OLD to NEW"
+ ,flagNone ["anon"]          (setboolopt "anon") "anonymize accounts and payees"
+ ,flagReq  ["pivot"]         (\s opts -> Right $ setopt "pivot" s opts)  "TAGNAME" "use some other field/tag for account names"
+ ,flagNone ["ignore-assertions","I"] (setboolopt "ignore-assertions") "ignore any balance assertions"
  ]
 
 -- | Common report-related flags: --period, --cost, etc.
@@ -134,23 +139,24 @@ reportflags = [
  ,flagNone ["quarterly","Q"] (setboolopt "quarterly") "multiperiod/multicolumn report by quarter"
  ,flagNone ["yearly","Y"]    (setboolopt "yearly") "multiperiod/multicolumn report by year"
  ,flagReq  ["period","p"]    (\s opts -> Right $ setopt "period" s opts) "PERIODEXP" "set start date, end date, and/or report interval all at once (overrides the flags above)"
- ,flagNone ["date2"]         (setboolopt "date2") "show, and make -b/-e/-p/date: match, secondary dates instead"
+ ,flagNone ["date2"]         (setboolopt "date2") "match the secondary date instead (see command help for other effects)"
 
+ ,flagNone ["unmarked","U"]  (setboolopt "unmarked") "include only unmarked postings/txns (can combine with -P or -C)"
+ ,flagNone ["pending","P"]   (setboolopt "pending") "include only pending postings/txns"
  ,flagNone ["cleared","C"]   (setboolopt "cleared") "include only cleared postings/txns"
- ,flagNone ["pending"]       (setboolopt "pending") "include only pending postings/txns"
- ,flagNone ["uncleared","U"] (setboolopt "uncleared") "include only uncleared (and pending) postings/txns"
  ,flagNone ["real","R"]      (setboolopt "real") "include only non-virtual postings"
- ,flagReq  ["depth"]         (\s opts -> Right $ setopt "depth" s opts) "N" "hide accounts/postings deeper than N"
- ,flagNone ["empty","E"]     (setboolopt "empty") "show items with zero amount, normally hidden"
- ,flagNone ["cost","B"]      (setboolopt "cost") "show amounts in their cost price's commodity"
- ,flagNone ["anon"]              (setboolopt "anon") "output ledger with anonymized accounts and payees."
+ ,flagReq  ["depth"]         (\s opts -> Right $ setopt "depth" s opts) "NUM" "(or -NUM): hide accounts/postings deeper than this"
+ ,flagNone ["empty","E"]     (setboolopt "empty") "show items with zero amount, normally hidden (and vice-versa in hledger-ui/hledger-web)"
+ ,flagNone ["cost","B"]      (setboolopt "cost") "convert amounts to their cost at transaction time (using the transaction price, if any)"
+ ,flagNone ["value","V"]     (setboolopt "value") "convert amounts to their market value on the report end date (using the most recent applicable market price, if any)"
+ ,flagNone ["auto"]          (setboolopt "auto") "apply automated posting rules to modify transactions"
+ ,flagNone ["forecast"]      (setboolopt "forecast") "apply periodic transaction rules to generate future transactions, to 6 months from now or report end date"
  ]
 
 -- | Common output-related flags: --output-file, --output-format...
-outputflags = [
-   flagReq  ["output-format","O"] (\s opts -> Right $ setopt "output-format" s opts) "FMT" "select the output format. Supported formats:\ntxt, csv."
-  ,flagReq  ["output-file","o"]   (\s opts -> Right $ setopt "output-file" s opts) "FILE" "write output to FILE. A file extension matching one of the above formats selects that format."
-  ]
+outputflags = [outputFormatFlag, outputFileFlag]
+outputFormatFlag = flagReq  ["output-format","O"] (\s opts -> Right $ setopt "output-format" s opts) "FMT" "select the output format. Supported formats:\ntxt, csv, html."
+outputFileFlag   = flagReq  ["output-file","o"]   (\s opts -> Right $ setopt "output-file" s opts) "FILE" "write output to FILE. A file extension matching one of the above formats selects that format."
 
 argsFlag :: FlagHelp -> Arg RawOpts
 argsFlag desc = flagArg (\s opts -> Right $ setopt "args" s opts) desc
@@ -165,74 +171,119 @@ generalflagsgroup3 = (generalflagstitle, helpflags)
 
 -- cmdargs mode constructors
 
--- | A basic mode template.
+-- | An empty cmdargs mode to use as a template.
+-- Modes describe the top-level command, ie the program, or a subcommand,
+-- telling cmdargs how to parse a command line and how to
+-- generate the command's usage text.
 defMode :: Mode RawOpts
-defMode =   Mode {
-  modeNames = []
- ,modeHelp = ""
- ,modeHelpSuffix = []
- ,modeValue = []
- ,modeCheck = Right
- ,modeReform = const Nothing
- ,modeExpandAt = True
- ,modeGroupFlags = Group {
-     groupNamed = []
-    ,groupUnnamed = [
-        flagNone ["h"] (setboolopt "h") "Show command usage."
-        ]
-    ,groupHidden = []
-    }
- ,modeArgs = ([], Nothing)
- ,modeGroupModes = toGroup []
+defMode = Mode {
+  modeNames       = []            -- program/command name(s)
+ ,modeHelp        = ""            -- short help for this command
+ ,modeHelpSuffix  = []            -- text displayed after the usage
+ ,modeGroupFlags  = Group {       -- description of flags accepted by the command
+    groupNamed   = []             --  named groups of flags
+   ,groupUnnamed = []             --  ungrouped flags
+   ,groupHidden  = []             --  flags not displayed in the usage
+   }
+ ,modeArgs        = ([], Nothing) -- description of arguments accepted by the command
+ ,modeValue       = []            -- value returned when this mode is used to parse a command line
+ ,modeCheck       = Right         -- whether the mode's value is correct
+ ,modeReform      = const Nothing -- function to convert the value back to a command line arguments
+ ,modeExpandAt    = True          -- expand @ arguments for program ?
+ ,modeGroupModes  = toGroup []    -- sub-modes
  }
 
--- | A basic subcommand mode with the given command name(s).
+-- | A cmdargs mode suitable for a hledger built-in command
+-- with the given names (primary name + optional aliases).
+-- The usage message shows [QUERY] as argument.
 defCommandMode :: [Name] -> Mode RawOpts
 defCommandMode names = defMode {
    modeNames=names
+  ,modeGroupFlags  = Group {
+     groupNamed   = []
+    ,groupUnnamed = [
+       flagNone ["help"] (setboolopt "help") "Show usage."
+      -- ,flagNone ["help"] (setboolopt "help") "Show long help."
+      ]
+    ,groupHidden  = []             --  flags not displayed in the usage
+    }
+  ,modeArgs = ([], Just $ argsFlag "[QUERY]")
   ,modeValue=[("command", headDef "" names)]
-  ,modeArgs = ([], Just $ argsFlag "[PATTERNS]")
   }
 
--- | A basic subcommand mode suitable for an add-on command.
-defAddonCommandMode :: Name -> Mode RawOpts
-defAddonCommandMode addon = defMode {
-   modeNames = [addon]
-  ,modeHelp = fromMaybe "" $ lookup (stripAddonExtension addon) standardAddonsHelp
-  ,modeValue=[("command",addon)]
+-- | A cmdargs mode representing the hledger add-on command with the
+-- given name, providing hledger's common input/reporting/help flags.
+-- Just used when invoking addons.
+addonCommandMode :: Name -> Mode RawOpts
+addonCommandMode name = (defCommandMode [name]) {
+   modeHelp = ""
+     -- XXX not needed ?
+     -- fromMaybe "" $ lookup (stripAddonExtension name) [
+     --   ("addon"        , "dummy add-on command for testing")
+     --  ,("addon2"       , "dummy add-on command for testing")
+     --  ,("addon3"       , "dummy add-on command for testing")
+     --  ,("addon4"       , "dummy add-on command for testing")
+     --  ,("addon5"       , "dummy add-on command for testing")
+     --  ,("addon6"       , "dummy add-on command for testing")
+     --  ,("addon7"       , "dummy add-on command for testing")
+     --  ,("addon8"       , "dummy add-on command for testing")
+     --  ,("addon9"       , "dummy add-on command for testing")
+     --  ]
   ,modeGroupFlags = Group {
       groupUnnamed = []
      ,groupHidden = []
      ,groupNamed = [generalflagsgroup1]
      }
-  ,modeArgs = ([], Just $ argsFlag "[ARGS]")
   }
 
--- | Built-in descriptions for some of the known external addons,
--- since we don't currently have any way to ask them.
-standardAddonsHelp :: [(String,String)]
-standardAddonsHelp = [
-   ("chart", "generate simple balance pie charts")
-  ,("interest", "generate interest transaction entries")
-  ,("irr", "calculate internal rate of return")
-  ,("vty", "start the curses-style interface")
-  ,("web", "start the web interface")
-  ,("accounts", "list account names")
-  ,("balance-csv", "output a balance report as CSV")
-  ,("equity", "show a transaction entry zeroing all accounts")
-  ,("print-unique", "print only transactions with unique descriptions")
-  ,("register-csv", "output a register report as CSV")
-  ,("rewrite", "add specified postings to matched transaction entries")
-  ,("addon",  "dummy add-on command for testing")
-  ,("addon2", "dummy add-on command for testing")
-  ,("addon3", "dummy add-on command for testing")
-  ,("addon4", "dummy add-on command for testing")
-  ,("addon5", "dummy add-on command for testing")
-  ,("addon6", "dummy add-on command for testing")
-  ,("addon7", "dummy add-on command for testing")
-  ,("addon8", "dummy add-on command for testing")
-  ,("addon9", "dummy add-on command for testing")
-  ]
+-- | A command's documentation. Used both as part of CLI help, and as
+-- part of the hledger manual. See parseCommandDoc.
+type CommandDoc = String
+
+-- | Build a cmdarg mode for a hledger command,
+-- from a help template and flag/argument specifications.
+-- Reduces boilerplate a little, though the complicated cmdargs
+-- flag and argument specs are still required.
+hledgerCommandMode :: CommandDoc -> [Flag RawOpts] -> [(String, [Flag RawOpts])] 
+  -> [Flag RawOpts] -> ([Arg RawOpts], Maybe (Arg RawOpts)) -> Mode RawOpts
+hledgerCommandMode doc unnamedflaggroup namedflaggroups hiddenflaggroup argsdescr =
+  case parseCommandDoc doc of
+    Nothing -> error' $ "Could not parse command doc:\n"++doc++"\n"
+    Just (names, shorthelp, longhelplines) ->
+      (defCommandMode names) {
+         modeHelp        = shorthelp
+        ,modeHelpSuffix  = longhelplines
+        ,modeGroupFlags  = Group {
+            groupUnnamed = unnamedflaggroup
+           ,groupNamed   = namedflaggroups
+           ,groupHidden  = hiddenflaggroup
+           }
+        ,modeArgs        = argsdescr
+        }
+
+-- | Parse a command's documentation, as follows:
+--
+-- - First line: the command name then any aliases, as one or more space or comma-separated words
+--
+-- - Second line to a line containing just _FLAGS_, or the end: the short help
+--
+-- - Any lines after _FLAGS_: the long help (split into lines for cmdargs)
+--
+-- The CLI help displays the short help, then the cmdargs-generated
+-- flags list, then the long help (which some day we might make
+-- optional again).  The manual displays the short help followed by
+-- the long help, with no flags list.
+--
+parseCommandDoc :: CommandDoc -> Maybe ([Name], String, [String])
+parseCommandDoc t =
+  case lines t of
+    [] -> Nothing
+    (l:ls) -> Just (names, shorthelp, longhelplines)
+      where
+        names = words $ map (\c -> if c `elem` [',','\\'] then ' ' else c) l
+        (shorthelpls, longhelpls) = break (== "_FLAGS_") ls
+        shorthelp = unlines $ reverse $ dropWhile null $ reverse shorthelpls
+        longhelplines = dropWhile null $ drop 1 longhelpls
 
 -- | Get a mode's usage message as a nicely wrapped string.
 showModeUsage :: Mode a -> String
@@ -277,11 +328,10 @@ data CliOpts = CliOpts {
      rawopts_         :: RawOpts
     ,command_         :: String
     ,file_            :: [FilePath]
-    ,rules_file_      :: Maybe FilePath
+    ,inputopts_       :: InputOpts
+    ,reportopts_      :: ReportOpts
     ,output_file_     :: Maybe FilePath
     ,output_format_   :: Maybe String
-    ,alias_           :: [String]
-    ,ignore_assertions_ :: Bool
     ,debug_           :: Int            -- ^ debug level, set by @--debug[=N]@. See also 'Hledger.Utils.debugLevel'.
     ,no_new_accounts_ :: Bool           -- add
     ,width_           :: Maybe String   -- ^ the --width value provided, if any
@@ -289,7 +339,6 @@ data CliOpts = CliOpts {
                                         -- 1. the COLUMNS env var, if set
                                         -- 2. the width reported by the terminal, if supported
                                         -- 3. the default (80)
-    ,reportopts_      :: ReportOpts
  } deriving (Show, Data, Typeable)
 
 instance Default CliOpts where def = defcliopts
@@ -306,9 +355,7 @@ defcliopts = CliOpts
     def
     def
     def
-    def
     defaultWidth
-    def
 
 -- | Convert possibly encoded option values to regular unicode strings.
 decodeRawOpts :: RawOpts -> RawOpts
@@ -318,12 +365,21 @@ decodeRawOpts = map (\(name',val) -> (name', fromSystemString val))
 defaultWidth :: Int
 defaultWidth = 80
 
+-- | Replace any numeric flags (eg -2) with their long form (--depth 2),
+-- as I'm guessing cmdargs doesn't support this directly.  
+replaceNumericFlags :: [String] -> [String]
+replaceNumericFlags = map replace
+  where
+    replace ('-':ds) | not (null ds) && all isDigit ds = "--depth="++ds
+    replace s = s
+
 -- | Parse raw option string values to the desired final data types.
 -- Any relative smart dates will be converted to fixed dates based on
 -- today's date. Parsing failures will raise an error.
 -- Also records the terminal width, if supported.
 rawOptsToCliOpts :: RawOpts -> IO CliOpts
 rawOptsToCliOpts rawopts = checkCliOpts <$> do
+  let iopts = rawOptsToInputOpts rawopts
   ropts <- rawOptsToReportOpts rawopts
   mcolumns <- readMay <$> getEnvSafe "COLUMNS"
   mtermwidth <-
@@ -338,43 +394,67 @@ rawOptsToCliOpts rawopts = checkCliOpts <$> do
               rawopts_         = rawopts
              ,command_         = stringopt "command" rawopts
              ,file_            = map (T.unpack . stripquotes . T.pack) $ listofstringopt "file" rawopts
-             ,rules_file_      = maybestringopt "rules-file" rawopts
+             ,inputopts_       = iopts
+             ,reportopts_      = ropts
              ,output_file_     = maybestringopt "output-file" rawopts
              ,output_format_   = maybestringopt "output-format" rawopts
-             ,alias_           = map (T.unpack . stripquotes . T.pack) $ listofstringopt "alias" rawopts
              ,debug_           = intopt "debug" rawopts
-             ,ignore_assertions_ = boolopt "ignore-assertions" rawopts
              ,no_new_accounts_ = boolopt "no-new-accounts" rawopts -- add
              ,width_           = maybestringopt "width" rawopts
              ,available_width_ = availablewidth
-             ,reportopts_      = ropts
              }
 
 -- | Do final validation of processed opts, raising an error if there is trouble.
 checkCliOpts :: CliOpts -> CliOpts
 checkCliOpts opts =
-  either optserror (const opts) $ do
+  either usageError (const opts) $ do
     -- XXX move to checkReportOpts or move _format to CliOpts
     case lineFormatFromOpts $ reportopts_ opts of
       Left err -> Left $ "could not parse format option: "++err
       Right _  -> Right ()
   -- XXX check registerWidthsFromOpts opts
 
--- Currently only used by some extras/ scripts:
--- | Parse hledger CLI options from the command line using the given
--- cmdargs mode, and either return them or, if a help flag is present,
--- print the mode help and exit the program.
-getCliOpts :: Mode RawOpts -> IO CliOpts
-getCliOpts mode' = do
-  args' <- getArgs
-  let rawopts = decodeRawOpts $ processValue mode' args'
+-- | A helper for addon commands: this parses options and arguments from 
+-- the current command line using the given hledger-style cmdargs mode, 
+-- and returns a CliOpts. Or, with --help or -h present, it prints 
+-- long or short help, and exits the program. 
+-- When --debug is present, also prints some debug output.
+-- Note this is not used by the main hledger executable.
+--
+-- The help texts are generated from the mode.
+-- Long help includes the full usage description generated by cmdargs
+-- (including all supported options), framed by whatever pre- and postamble
+-- text the mode specifies. It's intended that this forms a complete
+-- help document or manual.
+--
+-- Short help is a truncated version of the above: the preamble and
+-- the first part of the usage, up to the first line containing "flags:"
+-- (normally this marks the start of the common hledger flags);
+-- plus a mention of --help and the (presumed supported) common
+-- hledger options not displayed.
+--
+-- Tips:
+-- Empty lines in the pre/postamble are removed by cmdargs; 
+-- add a space character to preserve them.
+--
+getHledgerCliOpts :: Mode RawOpts -> IO CliOpts
+getHledgerCliOpts mode' = do
+  args' <- getArgs >>= expandArgsAt
+  let rawopts = either usageError decodeRawOpts $ process mode' args'
   opts <- rawOptsToCliOpts rawopts
   debugArgs args' opts
-  -- if any (`elem` args) ["--help","-h","-?"]
-  when ("h" `inRawOpts` rawopts_ opts) $ putStr (showModeUsage mode') >> exitSuccess
-  when ("help" `inRawOpts` rawopts_ opts) $ printHelpForTopic (topicForMode mode') >> exitSuccess
+  when ("help" `inRawOpts` rawopts_ opts) $ putStr shorthelp >> exitSuccess
+  -- when ("help" `inRawOpts` rawopts_ opts) $ putStr longhelp  >> exitSuccess
   return opts
   where
+    longhelp = showModeUsage mode'
+    shorthelp =
+      unlines $
+        (reverse $ dropWhile null $ reverse $ takeWhile (not . ("flags:" `isInfixOf`)) $ lines longhelp)
+        ++
+        [""
+        ,"  See also hledger -h for general hledger options."
+        ]
     -- | Print debug info about arguments and options if --debug is present.
     debugArgs :: [String] -> CliOpts -> IO ()
     debugArgs args' opts =
@@ -387,11 +467,6 @@ getCliOpts mode' = do
         putStrLn $ "search query: " ++ show (queryFromOpts d $ reportopts_ opts)
 
 -- CliOpts accessors
-
--- | Get the account name aliases from options, if any.
-aliasesFromOpts :: CliOpts -> [AccountAlias]
-aliasesFromOpts = map (\a -> fromparse $ runParser accountaliasp ("--alias "++quoteIfNeeded a) $ T.pack a)
-                  . alias_
 
 -- | Get the (tilde-expanded, absolute) journal file path from
 -- 1. options, 2. an environment variable, or 3. the default.
@@ -428,6 +503,7 @@ defaultOutputFormat = "txt"
 outputFormats =
   [defaultOutputFormat] ++
   ["csv"
+  ,"html"
   ]
 
 -- | Get the output format from the --output-format option,
@@ -455,7 +531,7 @@ filePathExtension = dropWhile (=='.') . snd . splitExtension . snd . splitFileNa
 rulesFilePathFromOpts :: CliOpts -> IO (Maybe FilePath)
 rulesFilePathFromOpts opts = do
   d <- getCurrentDirectory
-  maybe (return Nothing) (fmap Just . expandPath d) $ rules_file_ opts
+  maybe (return Nothing) (fmap Just . expandPath d) $ mrules_file_ $ inputopts_ opts
 
 -- | Get the width in characters to use for console output.
 -- This comes from the --width option, or the COLUMNS environment
@@ -464,8 +540,8 @@ rulesFilePathFromOpts opts = do
 widthFromOpts :: CliOpts -> Int
 widthFromOpts CliOpts{width_=Nothing, available_width_=w} = w
 widthFromOpts CliOpts{width_=Just s}  =
-    case runParser (read `fmap` some digitChar <* eof :: ParsecT Dec String Identity Int) "(unknown)" s of
-        Left e   -> optserror $ "could not parse width option: "++show e
+    case runParser (read `fmap` some digitChar <* eof :: ParsecT Void String Identity Int) "(unknown)" s of
+        Left e   -> usageError $ "could not parse width option: "++show e
         Right w  -> w
 
 -- for register:
@@ -483,20 +559,15 @@ registerWidthsFromOpts :: CliOpts -> (Int, Maybe Int)
 registerWidthsFromOpts CliOpts{width_=Nothing, available_width_=w} = (w, Nothing)
 registerWidthsFromOpts CliOpts{width_=Just s}  =
     case runParser registerwidthp "(unknown)" s of
-        Left e   -> optserror $ "could not parse width option: "++show e
+        Left e   -> usageError $ "could not parse width option: "++show e
         Right ws -> ws
     where
-        registerwidthp :: (Stream s, Char ~ Token s) => ParsecT Dec s m (Int, Maybe Int)
+        registerwidthp :: (Stream s, Char ~ Token s) => ParsecT Void s m (Int, Maybe Int)
         registerwidthp = do
           totalwidth <- read `fmap` some digitChar
           descwidth <- optional (char ',' >> read `fmap` some digitChar)
           eof
           return (totalwidth, descwidth)
-
--- | Drop leading components of accounts names as specified by --drop, but only in --flat mode.
-maybeAccountNameDrop :: ReportOpts -> AccountName -> AccountName
-maybeAccountNameDrop opts a | tree_ opts = a
-                            | otherwise  = accountNameDrop (drop_ opts) a
 
 -- for balance, currently:
 
@@ -516,53 +587,63 @@ defaultBalanceLineFormat = BottomAligned [
 
 -- Other utils
 
--- | Get the sorted unique precise names and display names of hledger
--- add-ons found in the current user's PATH. The precise names are the
--- add-on's filename with the "hledger-" prefix removed. The display
--- names have the file extension removed also, except when it's needed
--- for disambiguation.
+-- | Get the sorted unique canonical names of hledger addon commands
+-- found in the current user's PATH. These are used in command line
+-- parsing and to display the commands list.
 --
--- -- Also when there are exactly two similar names, one with the .hs or
--- -- .lhs extension and the other with the .exe extension or no
--- -- extension - presumably source and compiled versions of a haskell
--- -- script - we exclude the source version.
+-- Canonical addon names are the filenames of hledger-* executables in
+-- PATH, without the "hledger-" prefix, and without the file extension
+-- except when it's needed for disambiguation (see below).
 --
--- This function can return add-on names which shadow built-in command
--- names, but hledger will ignore these.
---
-hledgerAddons :: IO ([String],[String])
+-- When there are exactly two versions of an executable (same base
+-- name, different extensions) that look like a source and compiled
+-- pair (one has .exe, .com, or no extension), the source version will
+-- be excluded (even if it happens to be newer). When there are three
+-- or more versions (or two versions that don't look like a
+-- source/compiled pair), they are all included, with file extensions
+-- intact.
+-- 
+hledgerAddons :: IO [String]
 hledgerAddons = do
-  exes <- hledgerExecutablesInPath
-  let precisenames = -- concatMap dropRedundant $
-                     -- groupBy (\a b -> dropExtension a == dropExtension b) $
-                     map stripprefix exes
-  let displaynames = concatMap stripext $
-                     groupBy (\a b -> dropExtension a == dropExtension b) precisenames
-  return (precisenames, displaynames)
-  where
-    stripprefix = drop (length progname + 1)
-    -- dropRedundant [f,f2] | takeExtension f `elem` ["",".exe"] && takeExtension f2 `elem` [".hs",".lhs"] = [f]
-    -- dropRedundant fs = fs
-    stripext [f] = [dropExtension f]
-    stripext fs  = fs
+  -- past bug generator
+  as1 <- hledgerExecutablesInPath                                  -- ["hledger-check","hledger-check-dates","hledger-check-dates.hs","hledger-check.hs","hledger-check.py"]
+  let as2 = map stripPrognamePrefix as1                            -- ["check","check-dates","check-dates.hs","check.hs","check.py"]
+  let as3 = sortBy (comparing takeBaseName) as2                    -- ["check","check.hs","check.py","check-dates","check-dates.hs"]
+  let as4 = groupBy (\a b -> takeBaseName a == takeBaseName b) as3 -- [["check","check.hs","check.py"],["check-dates","check-dates.hs"]]
+  let as5 = concatMap dropRedundantSourceVersion as4               -- ["check","check.hs","check.py","check-dates"]
+  return as5
 
--- | Get the sorted unique filenames of all hledger-* executables in
--- the current user's PATH. Currently these are: files in any of the
--- PATH directories, named hledger-*, with either no extension (and no
--- periods in the name) or one of the addonExtensions.  Limitations:
--- we do not currently check that the file is really a file (not eg a
--- directory) or whether it has execute permission.
-hledgerExecutablesInPath :: IO [String]
-hledgerExecutablesInPath = do
+stripPrognamePrefix = drop (length progname + 1)
+
+dropRedundantSourceVersion [f,g]
+  | takeExtension f `elem` compiledExts = [f]
+  | takeExtension g `elem` compiledExts = [g]
+dropRedundantSourceVersion fs = fs
+
+compiledExts = ["",".com",".exe"] 
+
+
+-- | Get all sorted unique filenames in the current user's PATH. 
+-- We do not currently filter out non-file objects or files without execute permission.
+likelyExecutablesInPath :: IO [String]
+likelyExecutablesInPath = do
   pathdirs <- splitOneOf "[:;]" `fmap` getEnvSafe "PATH"
   pathfiles <- concat `fmap` mapM getDirectoryContentsSafe pathdirs
-  return $ nub $ sort $ filter isHledgerExeName pathfiles
-  -- XXX should exclude directories and files without execute permission.
+  return $ nub $ sort pathfiles
+  -- exclude directories and files without execute permission.
   -- These will do a stat for each hledger-*, probably ok.
   -- But they need paths, not just filenames
-  -- hledgerexes  <- filterM doesFileExist hledgernamed
-  -- hledgerexes' <- filterM isExecutable hledgerexes
-  -- return hledgerexes
+  -- exes'  <- filterM doesFileExist exe'
+  -- exes'' <- filterM isExecutable exes'
+  -- return exes''
+
+-- | Get the sorted unique filenames of all hledger-* executables in
+-- the current user's PATH. These are files in any of the PATH directories,
+-- named hledger-*, with either no extension (and no periods in the name) 
+-- or one of the addonExtensions. 
+-- We do not currently filter out non-file objects or files without execute permission.
+hledgerExecutablesInPath :: IO [String]
+hledgerExecutablesInPath = filter isHledgerExeName <$> likelyExecutablesInPath
 
 -- isExecutable f = getPermissions f >>= (return . executable)
 
@@ -570,14 +651,14 @@ isHledgerExeName :: String -> Bool
 isHledgerExeName = isRight . parsewith hledgerexenamep . T.pack
     where
       hledgerexenamep = do
-        _ <- string progname
+        _ <- string $ T.pack progname
         _ <- char '-'
-        _ <- some (noneOf ".")
-        optional (string "." >> choice' (map string addonExtensions))
+        _ <- some $ noneOf ['.']
+        optional (string "." >> choice' (map (string . T.pack) addonExtensions))
         eof
 
-stripAddonExtension :: String -> String
-stripAddonExtension = regexReplace re "" where re = "\\.(" ++ intercalate "|" addonExtensions ++ ")$"
+-- stripAddonExtension :: String -> String
+-- stripAddonExtension = regexReplace re "" where re = "\\.(" ++ intercalate "|" addonExtensions ++ ")$"
 
 addonExtensions :: [String]
 addonExtensions =
@@ -613,9 +694,3 @@ getDirectoryContentsSafe d =
 --     d <- getCurrentDay
 --     putStrLn $ "search query: " ++ (show $ queryFromOpts d $ reportopts_ opts)
 
--- tests
-
-tests_Hledger_Cli_CliOptions :: Test
-tests_Hledger_Cli_CliOptions = TestList
- [
- ]

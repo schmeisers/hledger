@@ -1,15 +1,16 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-|
 
 -}
 
 module Hledger.UI.UIOptions
 where
+import Data.Data (Data)
 import Data.Default
-#if !MIN_VERSION_base(4,8,0)
-import Data.Functor.Compat ((<$>))
-#endif
+import Data.Typeable (Typeable)
 import Data.List (intercalate)
+import System.Environment
 
 import Hledger.Cli hiding (progname,version,prognameandversion)
 import Hledger.UI.Theme (themeNames)
@@ -25,21 +26,23 @@ prognameandversion :: String
 prognameandversion = progname ++ " " ++ version :: String
 
 uiflags = [
-  -- flagNone ["debug-ui"]  (\opts -> setboolopt "rules-file" opts) "run with no terminal output, showing console"
-   flagNone ["watch"] (\opts -> setboolopt "watch" opts) "watch for data changes and reload automatically"
+  -- flagNone ["debug-ui"] (setboolopt "rules-file") "run with no terminal output, showing console"
+   flagNone ["watch"] (setboolopt "watch") "watch for data and date changes and reload automatically"
   ,flagReq  ["theme"] (\s opts -> Right $ setopt "theme" s opts) "THEME" ("use this custom display theme ("++intercalate ", " themeNames++")")
   ,flagReq  ["register"] (\s opts -> Right $ setopt "register" s opts) "ACCTREGEX" "start in the (first) matched account's register"
-  ,flagNone ["change"] (\opts -> setboolopt "change" opts)
+  ,flagNone ["change"] (setboolopt "change")
     "show period balances (changes) at startup instead of historical balances"
-  -- ,flagNone ["cumulative"] (\opts -> setboolopt "cumulative" opts)
+  -- ,flagNone ["cumulative"] (setboolopt "cumulative")
   --   "show balance change accumulated across periods (in multicolumn reports)"
-  -- ,flagNone ["historical","H"] (\opts -> setboolopt "historical" opts)
+  -- ,flagNone ["historical","H"] (setboolopt "historical")
   --   "show historical ending balance in each period (includes postings before report start date)\n "
-  ,flagNone ["flat"] (\opts -> setboolopt "flat" opts) "show full account names, unindented"
+  ,flagNone ["flat","F"] (setboolopt "flat") "show accounts as a list (default)"
+  ,flagNone ["tree","T"] (setboolopt "tree") "show accounts as a tree"
+--  ,flagNone ["present"] (setboolopt "present") "exclude transactions dated later than today (default)"
+  ,flagNone ["future"] (setboolopt "future") "show transactions dated later than today (normally hidden)"
   -- ,flagReq ["drop"] (\s opts -> Right $ setopt "drop" s opts) "N" "with --flat, omit this many leading account name components"
   -- ,flagReq  ["format"] (\s opts -> Right $ setopt "format" s opts) "FORMATSTR" "use this custom line format"
-  ,flagNone ["no-elide"] (\opts -> setboolopt "no-elide" opts) "don't compress empty parent accounts on one line"
-  ,flagNone ["value","V"] (setboolopt "value") "show amounts as their current market value in their default valuation commodity (accounts screen)"
+  -- ,flagNone ["no-elide"] (setboolopt "no-elide") "don't compress empty parent accounts on one line"
  ]
 
 --uimode :: Mode [([Char], [Char])]
@@ -60,10 +63,12 @@ uimode =  (mode "hledger-ui" [("command","ui")]
 data UIOpts = UIOpts {
      watch_   :: Bool
     ,change_  :: Bool
+    ,presentorfuture_  :: PresentOrFutureOpt
     ,cliopts_ :: CliOpts
  } deriving (Show)
 
 defuiopts = UIOpts
+    def
     def
     def
     def
@@ -76,16 +81,35 @@ rawOptsToUIOpts rawopts = checkUIOpts <$> do
   return defuiopts {
               watch_   = boolopt "watch" rawopts
              ,change_  = boolopt "change" rawopts
+             ,presentorfuture_ = presentorfutureopt rawopts
              ,cliopts_ = cliopts
              }
 
+-- | Should transactions dated later than today be included ? 
+-- Like flat/tree mode, there are three states, and the meaning of default can vary by command.
+data PresentOrFutureOpt = PFDefault | PFPresent | PFFuture deriving (Eq, Show, Data, Typeable)
+instance Default PresentOrFutureOpt where def = PFDefault
+
+presentorfutureopt :: RawOpts -> PresentOrFutureOpt
+presentorfutureopt rawopts =
+  case reverse $ filter (`elem` ["present","future"]) $ map fst rawopts of
+    ("present":_) -> PFPresent
+    ("future":_)  -> PFFuture
+    _             -> PFDefault
+
 checkUIOpts :: UIOpts -> UIOpts
 checkUIOpts opts =
-  either optserror (const opts) $ do
+  either usageError (const opts) $ do
     case maybestringopt "theme" $ rawopts_ $ cliopts_ opts of
       Just t | not $ elem t themeNames -> Left $ "invalid theme name: "++t
       _                                -> Right ()
 
+-- XXX some refactoring seems due
 getHledgerUIOpts :: IO UIOpts
-getHledgerUIOpts = processArgs uimode >>= return . decodeRawOpts >>= rawOptsToUIOpts
+--getHledgerUIOpts = processArgs uimode >>= return . decodeRawOpts >>= rawOptsToUIOpts
+getHledgerUIOpts = do
+  args <- getArgs >>= expandArgsAt
+  let args' = replaceNumericFlags args 
+  let cmdargopts = either usageError id $ process uimode args'
+  rawOptsToUIOpts $ decodeRawOpts cmdargopts 
 

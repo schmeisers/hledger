@@ -19,7 +19,7 @@ You can use the command line:
 or ghci:
 
 > $ ghci hledger
-> > j <- readJournalFile Nothing Nothing "data/sample.journal"
+> > j <- readJournalFile def "examples/sample.journal"
 > > register [] ["income","expenses"] j
 > 2008/01/01 income               income:salary                   $-1          $-1
 > 2008/06/01 gift                 income:gifts                    $-1          $-2
@@ -36,9 +36,10 @@ See "Hledger.Data.Ledger" for more examples.
 
 -}
 
+{-# LANGUAGE QuasiQuotes #-}
+
 module Hledger.Cli.Main where
 
--- import Control.Monad
 import Data.Char (isDigit)
 import Data.List
 import Safe
@@ -49,107 +50,161 @@ import System.FilePath
 import System.Process
 import Text.Printf
 
-import Hledger (ensureJournalFileExists)
-import Hledger.Cli.Add
-import Hledger.Cli.Accounts
-import Hledger.Cli.Balance
-import Hledger.Cli.Balancesheet
-import Hledger.Cli.Cashflow
-import Hledger.Cli.DocFiles
-import Hledger.Cli.Help
-import Hledger.Cli.Histogram
-import Hledger.Cli.Incomestatement
-import Hledger.Cli.Info
-import Hledger.Cli.Man
-import Hledger.Cli.Print
-import Hledger.Cli.Register
-import Hledger.Cli.Stats
-import Hledger.Cli.CliOptions
-import Hledger.Cli.Tests
-import Hledger.Cli.Utils
-import Hledger.Cli.Version
-import Hledger.Data.Dates (getCurrentDay)
-import Hledger.Data.RawOptions (RawOpts, optserror)
-import Hledger.Reports.ReportOptions (period_, interval_, queryFromOpts)
-import Hledger.Utils
+import Hledger.Cli
 
 
--- | The overall cmdargs mode describing command-line options for hledger.
+-- | The overall cmdargs mode describing hledger's command-line options and subcommands.
 mainmode addons = defMode {
-  modeNames = [progname]
- ,modeHelp = unlines []
- ,modeHelpSuffix = [""]
+  modeNames = [progname ++ " [CMD]"]
  ,modeArgs = ([], Just $ argsFlag "[ARGS]")
+ ,modeHelp = unlines ["hledger's main command line interface. Runs builtin commands and other hledger executables. Type \"hledger\" to list available commands."]
  ,modeGroupModes = Group {
-    -- modes (commands) in named groups:
-    groupNamed = [
-      ("Data entry commands", [
-        addmode
-       ])
-     ,("\nReporting commands", [
-        printmode
-       ,accountsmode
-       ,balancemode
-       ,registermode
-       ,incomestatementmode
-       ,balancesheetmode
-       ,cashflowmode
-       ,activitymode
-       ,statsmode
-       ])
+    -- subcommands in the unnamed group, shown first:
+    groupUnnamed = [
      ]
-     ++ case addons of [] -> []
-                       cs -> [("\nAdd-on commands", map defAddonCommandMode cs)]
-    -- modes in the unnamed group, shown first without a heading:
-   ,groupUnnamed = [
-        helpmode
-       ,manmode
-       ,infomode
+    -- subcommands in named groups:
+   ,groupNamed = [
      ]
-    -- modes handled but not shown
-   ,groupHidden = [
-        testmode
-       ,oldconvertmode
-     ]
+    -- subcommands handled but not shown in the help:
+   ,groupHidden = map fst builtinCommands ++ map addonCommandMode addons
    }
  ,modeGroupFlags = Group {
      -- flags in named groups:
-     groupNamed = [generalflagsgroup3]
-     -- flags in the unnamed group, shown last without a heading:
+     groupNamed = [
+        (  "General input flags",     inputflags)
+       ,("\nGeneral reporting flags", reportflags)
+       ,("\nGeneral help flags",      helpflags)
+       ]
+     -- flags in the unnamed group, shown last:
     ,groupUnnamed = []
-     -- flags accepted but not shown in the help:
+     -- flags handled but not shown in the help:
     ,groupHidden =
-        detailedversionflag :
-        inputflags -- included here so they'll not raise a confusing error if present with no COMMAND
+        [detailedversionflag]
+        -- ++ inputflags -- included here so they'll not raise a confusing error if present with no COMMAND
     }
+ ,modeHelpSuffix = map (regexReplace "PROGNAME" progname) [
+     "Examples:"
+    ,"PROGNAME                         list commands"
+    ,"PROGNAME CMD [--] [OPTS] [ARGS]  run a command (use -- with addon commands)"
+    ,"PROGNAME-CMD [OPTS] [ARGS]       or run addon commands directly"
+    ,"PROGNAME -h                      show general usage"
+    ,"PROGNAME CMD -h                  show command usage"
+    ,"PROGNAME help [MANUAL]           show any of the hledger manuals in various formats"
+    ]
  }
 
-oldconvertmode = (defCommandMode ["convert"]) {
-  modeValue = [("command","convert")]
- ,modeHelp = "convert is no longer needed, just use -f FILE.csv"
- ,modeArgs = ([], Just $ argsFlag "[CSVFILE]")
- ,modeGroupFlags = Group {
-     groupUnnamed = []
-    ,groupHidden = helpflags
-    ,groupNamed = []
-    }
- }
+-- | Let's go!
+main :: IO ()
+main = do
 
-builtinCommands :: [Mode RawOpts]
-builtinCommands =
-  let gs = modeGroupModes $ mainmode []
-  in concatMap snd (groupNamed gs) ++ groupUnnamed gs ++ groupHidden gs
+  -- Choose and run the appropriate internal or external command based
+  -- on the raw command-line arguments, cmdarg's interpretation of
+  -- same, and hledger-* executables in the user's PATH. A somewhat
+  -- complex mishmash of cmdargs and custom processing, hence all the
+  -- debugging support and tests. See also Hledger.Cli.CliOptions and
+  -- command-line.test.
 
-builtinCommandNames :: [String]
-builtinCommandNames = concatMap modeNames builtinCommands
+  -- some preliminary (imperfect) argument parsing to supplement cmdargs
+  args <- getArgs >>= expandArgsAt
+  let
+    args'                = moveFlagsAfterCommand $ replaceNumericFlags args
+    isFlag               = ("-" `isPrefixOf`)
+    isNonEmptyNonFlag s  = not (isFlag s) && not (null s)
+    rawcmd               = headDef "" $ takeWhile isNonEmptyNonFlag args'
+    isNullCommand        = null rawcmd
+    (argsbeforecmd, argsaftercmd') = break (==rawcmd) args
+    argsaftercmd         = drop 1 argsaftercmd'
+    dbgIO :: Show a => String -> a -> IO ()
+    dbgIO = ptraceAtIO 2
+
+  dbgIO "running" prognameandversion
+  dbgIO "raw args" args
+  dbgIO "raw args rearranged for cmdargs" args'
+  dbgIO "raw command is probably" rawcmd
+  dbgIO "raw args before command" argsbeforecmd
+  dbgIO "raw args after command" argsaftercmd
+
+  -- Search PATH for add-ons, excluding any that match built-in command names
+  addons' <- hledgerAddons
+  let addons = filter (not . (`elem` builtinCommandNames) . dropExtension) addons'
+
+  -- parse arguments with cmdargs
+  opts <- argsToCliOpts args addons
+
+  -- select an action and run it.
+  let
+    cmd                  = command_ opts -- the full matched internal or external command name, if any
+    isInternalCommand    = cmd `elem` builtinCommandNames -- not (null cmd) && not (cmd `elem` addons)
+    isExternalCommand    = not (null cmd) && cmd `elem` addons -- probably
+    isBadCommand         = not (null rawcmd) && null cmd
+    hasVersion           = ("--version" `elem`)
+    hasDetailedVersion   = ("--version+" `elem`)
+    printUsage           = putStr $ showModeUsage $ mainmode addons
+    badCommandError      = error' ("command "++rawcmd++" is not recognized, run with no command to see a list") >> exitFailure
+    hasHelpFlag args     = any (`elem` args) ["-h","--help"]
+    f `orShowHelp` mode
+      | hasHelpFlag args = putStr $ showModeUsage mode
+      | otherwise        = f
+  dbgIO "processed opts" opts
+  dbgIO "command matched" cmd
+  dbgIO "isNullCommand" isNullCommand
+  dbgIO "isInternalCommand" isInternalCommand
+  dbgIO "isExternalCommand" isExternalCommand
+  dbgIO "isBadCommand" isBadCommand
+  d <- getCurrentDay
+  dbgIO "period from opts" (period_ $ reportopts_ opts)
+  dbgIO "interval from opts" (interval_ $ reportopts_ opts)
+  dbgIO "query from opts & args" (queryFromOpts d $ reportopts_ opts)
+  let
+    runHledgerCommand
+      -- high priority flags and situations. -h, then --help, then --info are highest priority.
+      | hasHelpFlag argsbeforecmd = dbgIO "" "-h before command, showing general usage" >> printUsage
+      | not (hasHelpFlag argsaftercmd) && (hasVersion argsbeforecmd || (hasVersion argsaftercmd && isInternalCommand))
+                                 = putStrLn prognameandversion
+      | not (hasHelpFlag argsaftercmd) && (hasDetailedVersion argsbeforecmd || (hasDetailedVersion argsaftercmd && isInternalCommand))
+                                 = putStrLn prognameanddetailedversion
+      -- \| (null externalcmd) && "binary-filename" `inRawOpts` rawopts = putStrLn $ binaryfilename progname
+      -- \| "--browse-args" `elem` args     = System.Console.CmdArgs.Helper.execute "cmdargs-browser" mainmode' args >>= (putStr . show)
+      | isNullCommand            = dbgIO "" "no command, showing commands list" >> printCommandsList addons
+      | isBadCommand             = badCommandError
+
+      -- builtin commands
+      | Just (cmdmode, cmdaction) <- findCommand cmd =
+        (case cmd of
+          "test" -> -- should not read the journal
+            cmdaction opts (error "journal-less command tried to use the journal")
+          "add" ->  -- should create the journal if missing
+            (ensureJournalFileExists =<< (head <$> journalFilePathFromOpts opts)) >>
+            withJournalDo opts cmdaction
+          _ ->      -- all other commands: read the journal or fail if missing
+            withJournalDo opts cmdaction
+        )
+        `orShowHelp` cmdmode
+
+      -- addon commands
+      | isExternalCommand = do
+          let externalargs = argsbeforecmd ++ filter (not.(=="--")) argsaftercmd
+          let shellcmd = printf "%s-%s %s" progname cmd (unwords' externalargs) :: String
+          dbgIO "external command selected" cmd
+          dbgIO "external command arguments" (map quoteIfNeeded externalargs)
+          dbgIO "running shell command" shellcmd
+          system shellcmd >>= exitWith
+
+      -- deprecated commands
+      -- cmd == "convert"         = error' (modeHelp oldconvertmode) >> exitFailure
+
+      -- shouldn't reach here
+      | otherwise                = usageError ("could not understand the arguments "++show args) >> exitFailure
+
+  runHledgerCommand
 
 -- | Parse hledger CLI options from these command line arguments and
 -- add-on command names, or raise any error.
 argsToCliOpts :: [String] -> [String] -> IO CliOpts
 argsToCliOpts args addons = do
   let
-    args'        = moveFlagsAfterCommand args
-    cmdargsopts  = processValue (mainmode addons) args'
+    args'        = moveFlagsAfterCommand $ replaceNumericFlags args
+    cmdargsopts  = either usageError id $ process (mainmode addons) args'
     cmdargsopts' = decodeRawOpts cmdargsopts
   rawOptsToCliOpts cmdargsopts'
 
@@ -160,8 +215,8 @@ argsToCliOpts args addons = do
 --
 -- Since we're not parsing flags as precisely as cmdargs here, this is
 -- imperfect. We make a decent effort to:
--- - move all no-argument help and input flags
--- - move all required-argument help and input flags along with their values, space-separated or not
+-- - move all no-argument help/input/report flags
+-- - move all required-argument help/input/report flags along with their values, space-separated or not
 -- - not confuse things further or cause misleading errors.
 moveFlagsAfterCommand :: [String] -> [String]
 moveFlagsAfterCommand args = moveArgs $ ensureDebugHasArg args
@@ -173,16 +228,21 @@ moveFlagsAfterCommand args = moveArgs $ ensureDebugHasArg args
        (bs,"--debug":[])                                   -> bs++"--debug=1":[]
        _                                                   -> as
 
-    -- -h ..., --version ...
-    moveArgs (f:a:as)   | isMovableNoArgFlag f                   = (moveArgs $ a:as) ++ [f]
-    -- -f FILE ..., --alias ALIAS ...
-    moveArgs (f:v:a:as) | isMovableReqArgFlag f, isValue v       = (moveArgs $ a:as) ++ [f,v]
-    -- -fFILE ..., --alias=ALIAS ...
-    moveArgs (fv:a:as)  | isMovableReqArgFlagAndValue fv         = (moveArgs $ a:as) ++ [fv]
-    -- -f(missing arg)
-    moveArgs (f:a:as)   | isMovableReqArgFlag f, not (isValue a) = (moveArgs $ a:as) ++ [f]
-    -- anything else
-    moveArgs as = as
+    moveArgs args = insertFlagsAfterCommand $ moveArgs' (args, [])
+      where
+        -- -h ..., --version ...
+        moveArgs' ((f:a:as), flags)   | isMovableNoArgFlag f                   = moveArgs' (a:as, flags ++ [f])
+        -- -f FILE ..., --alias ALIAS ...
+        moveArgs' ((f:v:a:as), flags) | isMovableReqArgFlag f, isValue v       = moveArgs' (a:as, flags ++ [f,v])
+        -- -fFILE ..., --alias=ALIAS ...
+        moveArgs' ((fv:a:as), flags)  | isMovableReqArgFlagAndValue fv         = moveArgs' (a:as, flags ++ [fv])
+        -- -f(missing arg)
+        moveArgs' ((f:a:as), flags)   | isMovableReqArgFlag f, not (isValue a) = moveArgs' (a:as, flags ++ [f])
+        -- anything else
+        moveArgs' (as, flags) = (as, flags)
+
+        insertFlagsAfterCommand ([],           flags) = flags
+        insertFlagsAfterCommand (command:args, flags) = [command] ++ flags ++ args
 
 isMovableNoArgFlag a  = "-" `isPrefixOf` a && dropWhile (=='-') a `elem` noargflagstomove
 
@@ -197,140 +257,8 @@ isValue "-"     = True
 isValue ('-':_) = False
 isValue _       = True
 
-flagstomove = inputflags ++ helpflags
+flagstomove = inputflags ++ reportflags ++ helpflags
 noargflagstomove  = concatMap flagNames $ filter ((==FlagNone).flagInfo) flagstomove
 reqargflagstomove = -- filter (/= "debug") $
                     concatMap flagNames $ filter ((==FlagReq ).flagInfo) flagstomove
-
--- | Let's go.
-main :: IO ()
-main = do
-
-  -- Choose and run the appropriate internal or external command based
-  -- on the raw command-line arguments, cmdarg's interpretation of
-  -- same, and hledger-* executables in the user's PATH. A somewhat
-  -- complex mishmash of cmdargs and custom processing, hence all the
-  -- debugging support and tests. See also Hledger.Cli.CliOptions and
-  -- command-line.test.
-
-  -- some preliminary (imperfect) argument parsing to supplement cmdargs
-  args <- getArgs
-  let
-    args'                = moveFlagsAfterCommand args
-    isFlag               = ("-" `isPrefixOf`)
-    isNonEmptyNonFlag s  = not (isFlag s) && not (null s)
-    rawcmd               = headDef "" $ takeWhile isNonEmptyNonFlag args'
-    isNullCommand        = null rawcmd
-    (argsbeforecmd, argsaftercmd') = break (==rawcmd) args
-    argsaftercmd         = drop 1 argsaftercmd'
-    dbgIO :: Show a => String -> a -> IO ()
-    dbgIO = tracePrettyAtIO 2
-
-  dbgIO "running" prognameandversion
-  dbgIO "raw args" args
-  dbgIO "raw args rearranged for cmdargs" args'
-  dbgIO "raw command is probably" rawcmd
-  dbgIO "raw args before command" argsbeforecmd
-  dbgIO "raw args after command" argsaftercmd
-
-  -- Search PATH for add-ons, excluding any that match built-in names.
-  -- The precise addon names (including file extension) are used for command
-  -- parsing, and the display names are used for displaying the commands list.
-  (addonPreciseNames', addonDisplayNames') <- hledgerAddons
-  let addonPreciseNames = filter (not . (`elem` builtinCommandNames) . dropExtension) addonPreciseNames'
-  let addonDisplayNames = filter (not . (`elem` builtinCommandNames)) addonDisplayNames'
-
-  -- parse arguments with cmdargs
-  opts <- argsToCliOpts args addonPreciseNames
-
-  -- select an action and run it.
-  let
-    cmd                  = command_ opts -- the full matched internal or external command name, if any
-    isInternalCommand    = cmd `elem` builtinCommandNames -- not (null cmd) && not (cmd `elem` addons)
-    isExternalCommand    = not (null cmd) && cmd `elem` addonPreciseNames -- probably
-    isBadCommand         = not (null rawcmd) && null cmd
-    hasVersion           = ("--version" `elem`)
-    hasDetailedVersion   = ("--version+" `elem`)
-    printUsage           = putStr $ showModeUsage $ mainmode addonDisplayNames
-    badCommandError      = error' ("command "++rawcmd++" is not recognized, run with no command to see a list") >> exitFailure
-    hasShortHelpFlag args = any (`elem` args) ["-h"]
-    hasLongHelpFlag args = any (`elem` args) ["--help"]
-    hasManFlag args      = any (`elem` args) ["--man"]
-    hasInfoFlag args     = any (`elem` args) ["--info"]
-    hasSomeHelpFlag args = hasShortHelpFlag args || hasLongHelpFlag args || hasManFlag args || hasInfoFlag args
-    f `orShowHelp` mode
-      | hasShortHelpFlag args = putStr $ showModeUsage mode
-      | hasLongHelpFlag args  = printHelpForTopic t
-      | hasManFlag args       = runManForTopic t
-      | hasInfoFlag args      = runInfoForTopic t
-      | otherwise             = f
-      where t = topicForMode mode
-  dbgIO "processed opts" opts
-  dbgIO "command matched" cmd
-  dbgIO "isNullCommand" isNullCommand
-  dbgIO "isInternalCommand" isInternalCommand
-  dbgIO "isExternalCommand" isExternalCommand
-  dbgIO "isBadCommand" isBadCommand
-  d <- getCurrentDay
-  dbgIO "period from opts" (period_ $ reportopts_ opts)
-  dbgIO "interval from opts" (interval_ $ reportopts_ opts)
-  dbgIO "query from opts & args" (queryFromOpts d $ reportopts_ opts)
-  let
-    runHledgerCommand
-      -- high priority flags and situations. -h, then --help, then --info are highest priority.
-      | hasShortHelpFlag argsbeforecmd = dbgIO "" "-h before command, showing general usage" >> printUsage
-      | hasLongHelpFlag  argsbeforecmd = dbgIO "" "--help before command, showing general manual" >> printHelpForTopic (topicForMode $ mainmode addonDisplayNames)
-      | hasManFlag       argsbeforecmd = dbgIO "" "--man before command, showing general manual with man" >> runManForTopic (topicForMode $ mainmode addonDisplayNames)
-      | hasInfoFlag      argsbeforecmd = dbgIO "" "--info before command, showing general manual with info" >> runInfoForTopic (topicForMode $ mainmode addonDisplayNames)
-      | not (hasSomeHelpFlag argsaftercmd) && (hasVersion argsbeforecmd || (hasVersion argsaftercmd && isInternalCommand))
-                                 = putStrLn prognameandversion
-      | not (hasSomeHelpFlag argsaftercmd) && (hasDetailedVersion argsbeforecmd || (hasDetailedVersion argsaftercmd && isInternalCommand))
-                                 = putStrLn prognameanddetailedversion
-      -- \| (null externalcmd) && "binary-filename" `inRawOpts` rawopts = putStrLn $ binaryfilename progname
-      -- \| "--browse-args" `elem` args     = System.Console.CmdArgs.Helper.execute "cmdargs-browser" mainmode' args >>= (putStr . show)
-      | isNullCommand            = dbgIO "" "no command, showing general usage" >> printUsage
-      | isBadCommand             = badCommandError
-
-      -- internal commands
-      | cmd == "activity"        = withJournalDo opts histogram       `orShowHelp` activitymode
-      | cmd == "add"             = (journalFilePathFromOpts opts >>= (ensureJournalFileExists . head) >> withJournalDo opts add) `orShowHelp` addmode
-      | cmd == "accounts"        = withJournalDo opts accounts        `orShowHelp` accountsmode
-      | cmd == "balance"         = withJournalDo opts balance         `orShowHelp` balancemode
-      | cmd == "balancesheet"    = withJournalDo opts balancesheet    `orShowHelp` balancesheetmode
-      | cmd == "cashflow"        = withJournalDo opts cashflow        `orShowHelp` cashflowmode
-      | cmd == "incomestatement" = withJournalDo opts incomestatement `orShowHelp` incomestatementmode
-      | cmd == "print"           = withJournalDo opts print'          `orShowHelp` printmode
-      | cmd == "register"        = withJournalDo opts register        `orShowHelp` registermode
-      | cmd == "stats"           = withJournalDo opts stats           `orShowHelp` statsmode
-      | cmd == "test"            = test' opts                         `orShowHelp` testmode
-      | cmd == "help"            = help' opts                         `orShowHelp` helpmode
-      | cmd == "man"             = man opts                           `orShowHelp` manmode
-      | cmd == "info"            = info' opts                         `orShowHelp` infomode
-
-      -- an external command
-      | isExternalCommand = do
-          let externalargs = argsbeforecmd ++ filter (not.(=="--")) argsaftercmd
-          let shellcmd = printf "%s-%s %s" progname cmd (unwords' externalargs) :: String
-          dbgIO "external command selected" cmd
-          dbgIO "external command arguments" (map quoteIfNeeded externalargs)
-          dbgIO "running shell command" shellcmd
-          system shellcmd >>= exitWith
-
-      -- deprecated commands
-      | cmd == "convert"         = error' (modeHelp oldconvertmode) >> exitFailure
-
-      -- shouldn't reach here
-      | otherwise                = optserror ("could not understand the arguments "++show args) >> exitFailure
-
-  runHledgerCommand
-
-
--- tests_runHledgerCommand = [
---   -- "runHledgerCommand" ~: do
---   --   let opts = defreportopts{query_="expenses"}
---   --   d <- getCurrentDay
---   --   runHledgerCommand addons opts@CliOpts{command_=cmd} args
-
---  ]
-
 

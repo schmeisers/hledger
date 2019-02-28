@@ -1,234 +1,253 @@
 ---
 title: home
 ...
-<style>
-.highslide img {max-width:200px; float:right; margin:0 0 1em 1em;}
-.highslide-caption {color:white; background-color:black;}
-a {white-space:nowrap;}
-/*div.asciicast { float:right; height:200px; }*/
-</style>
-<style media="screen and (min-width:1020px) and (orientation: landscape)">
-.indent0 { margin:0 15em 0  0em; }
-.indent1 { margin:0 10em 0  5em; }
-.indent2 { margin:0  5em 0 10em; }
-.indent3 { margin:0    0 0 15em; }
-</style>
-
-
-<!-- <div style="float:right; max-width:200px; margin-left:1em;"> <\!-- top-right area -\-> -->
-
-<!-- get started box 
-<div class="panel panel-primary">
-<div class="panel-heading">
-<h2 class="panel-title">Get started</h2>
-</div>
-<div class="panel-body">
-**[Download](download.html)**,
-read the
-**[release notes](release-notes.html)**,
-**[tutorial](step-by-step.html)**,
-or **[manual](docs.html)**,
-try the **[web UI](http://demo.hledger.org)**,
-introduce yourself and tell us what's good/bad..
 
 <style>
-tr {
-    /*vertical-align:top;*/
-    border-top:thin solid #bbb;
+ .highslide img {max-width:200px; float:right; margin:0 0 1em 1em;}
+ .highslide-caption {color:white; background-color:black;}
+ a {white-space:nowrap;}
+</style>
+
+<!-- INTRO -->
+
+<img src="images/coins2-248.png" width="" height="200" style="float:right; margin:1em 1em 0 1em;" />
+<h1 style="/*font-size:4em;*/ ">hledger</h1>
+<span style="font-size:xx-large;">
+Robust plain text accounting.
+<!-- Friendly, robust plain text accounting. -->
+<!-- Robust, powerful, plain text accounting. -->
+<!-- Robust, precise, plain text accounting. -->
+<!-- Plain text accounting for everyone. -->
+<!-- Making accounting fun for techies. -->
+</span>
+
+<span style="font-size:x-large;">hledger</span> is an accounting program, for tracking money, time, or
+other commodities. It is cross platform and released under GNU GPLv3.
+<!-- [![...](https://api.travis-ci.org/simonmichael/hledger.svg?branch=master)](https://travis-ci.org/simonmichael/hledger/builds) -->
+<!-- [![...](https://ci.appveyor.com/api/projects/status/5vejw0w5n5igdr42?svg=true)](https://ci.appveyor.com/project/simonmichael/hledger/history) -->
+[![...](https://img.shields.io/github/stars/simonmichael/hledger.svg?style=social&label=Github){style="min-width:102;" title="Star us!"}](https://github.com/simonmichael/hledger/)
+
+With powerful, intuitive functionality accessible from command line, terminal or web browser, 
+hledger is a fast, secure, dependable alternative to spreadsheets, Quickbooks, GnuCash, Xero etc.
+
+The hledger project is led by Simon Michael.
+I've been building and relying on hledger since 2007.
+I hope you find it helpful in mastering your time and money.
+Welcome to the project!
+
+<!-- DOCS -->
+
+<style>
+h2 { font-size:x-large; margin-top:.5em; }
+h3 { font-size:large; margin-bottom:.2em; }
+tr { border-top:thin solid #bbb; border-bottom:thin solid #bbb; vertical-align:top; }
+td:nth-child(1) { padding-right:1em; white-space:nowrap; }
+.col-sm-3, .col-sm-4 {
+  padding:0;
+}
+.contentbox {
+  margin:1em .5em .5em 0;
+  padding:.1em .5em;
+  border-radius:1em;
+}
+#introduction {
+/*  background-color:#ffb; */
+}
+#help {
+  background-color:#fdd;
+}
+#reference {
+  background-color:#eef;
+  text-align:left;
+}
+#reference .subcontent {
+  margin-left:1em;
+}
+#dev {
+  background-color:#eee;
+  text-align:left;
+}
+#dev .subcontent {
+  margin-left:1em;
+}
+#wiki {
+  background-color:#efe;
+  text-align:center;
+}
+#wiki .subcontent {
 }
 </style>
+
+<div class="container">
+<div class="row">
+<div class="col-sm-3">
+
+<div id=introduction class=contentbox>
+## Introduction
+
+### What is hledger?
+
+An enhanced, well-documented reimplementation of plain text accounting.\
+**[What is hledger ?](intro.html)**
+
+### What is plain text accounting?
+
+Using plain text data formats and version control for robust, transparent accounting.\
+**[plaintextaccounting.org](http://plaintextaccounting.org)**
+
+### What is accounting?
+
+Tracking your use of valuable commodities, such as money or time, for increased awareness and effectiveness.\
+**[Selected accounting links](more-docs.html#accounting)**
+</div>
+
+<div id=help class=contentbox>
+## Help/Feedback
+
 |
-|---------------------------|-------------------------------------------------------------------------
-| IRC                       | [#hledger](http://irc.hledger.org) 
-| Mail list&nbsp;&nbsp;     | via [google](http://list.hledger.org) or [gmane](http://news.gmane.org/gmane.comp.finance.ledger.hledger)
-| Twitter                   | [#ledgercli](https://twitter.com/search?q=%23ledgercli&src=typd&f=realtime), <a href="https://twitter.com/ledgertips">@LedgerTips</a>
-| Github                    | [code](http://github.com/simonmichael/hledger), [bugs](http://bugs.hledger.org), [issues](http://issues.hledger.org)
--->
-<!-- (see also [#ledger](http://webchat.freenode.net?channels=ledger&randomnick=1)) -->
+|-------------------|----------------------------------------------------------------------------|
+| IRC:              | [#hledger](http://irc.hledger.org) on Freenode <!-- [chat log](http://ircbrowse.net/browse/hledger); --> <!-- see also [#ledger](http://webchat.freenode.net?channels=ledger&randomnick=1) --> <!-- *Quick help and background chat.* --> <!-- *If you don't get an answer promptly, you can type `sm` to alert me, or leave the window open and check back later.* -->
+| Twitter:          | [#hledger,<br>#plaintextaccounting](#twitter)
+| Reddit:           | [/r/plaintextaccounting](https://www.reddit.com/r/plaintextaccounting/)
+| Hacker News:      | [stories](https://hn.algolia.com/?query=hledger&sort=byDate&prefix&page=0&dateRange=all&type=story), [comments](https://hn.algolia.com/?query=hledger&sort=byDate&prefix=false&page=0&dateRange=all&type=comment)
+| Mail list:        | [list.hledger.org](http://list.hledger.org), [hledger@googlegroups.com](mailto:hledger@googlegroups.com)
+| Issues:           | [bugs.hledger.org](http://bugs.hledger.org)&nbsp;(bugs), [issues.hledger.org](http://issues.hledger.org)&nbsp;(all), [open issues](CONTRIBUTING.html#open-issues)&nbsp;(overview)
+| Other:            | [simon@joyful.com](mailto:simon@joyful.com)
+</div> <!-- column -->
 
-<!-- | More...&nbsp;&nbsp;       | [quick links](http://hledger.org/developer-guide.html#quick-links) -->
-
-<!-- | web UI demo             | [demo.hledger.org](http://demo.hledger.org) | -->
-<!-- [web ui demo](http://demo.hledger.org/register?q=inacct%3Aassets%3Abank%3Achecking+sym%3A\%24) -->
-
-<!-- </div> -->
-<!-- </div> <\!-- end of get started box -\-> -->
-
-<!-- </div> <\!-- end of top-right area -\-> -->
-
-<div style="float:right; text-align:right; white-space:nowrap; ">
-<a style="margin-left:3px;" href="https://flattr.com/submit/auto?user_id=simonmichael&amp;url=http%3A%2F%2Fhledger.org" target="_blank"><img src="//api.flattr.com/button/flattr-badge-large.png" alt="" title="Flattr this" border="0"></a> 
-<a href="https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&amp;hosted_button_id=5J33NLXYXCYAY"><img width=62 height=31 border=0 src="https://www.paypal.com/en_US/i/btn/x-click-but04.gif" alt=""></a> 
-<div style="display:inline-block; position:relative; top:5px; width:62px; height:31px;">
-<script data-gratipay-username="simonmichael" data-gratipay-widget="button" src="//grtp.co/v1.js"></script> 
 </div>
-<a href="https://www.bountysource.com/trackers/536505-simonmichael-hledger"><img border=0 src="https://www.bountysource.com/badge/tracker?tracker_id=536505" alt=""></a> &nbsp;
-</div> <!-- end of donate buttons -->
+<div class="col-sm-3">
 
-<!-- main content -->
+<div id=reference class=contentbox>
+## Reference
 
-<h1 style="font-size:4em;">hledger</h1>
+**[Download](download.html)**\
+All the ways to install hledger.
 
-<img src="/images/coins2-248.png" width="" height="200" style="float:right; margin:1em 1em 0 1em;" />
+**[Release notes](release-notes.html)**\
+What's new in each hledger version.
 
-<h2 style="margin-top:0; margin-bottom:.5em;">
-<!-- Making accounting fun for techies. -->
-Simple, precise, plain text accounting.
-<!-- Plain text accounting for everyone. -->
-</h2>
+**[User manual](manual.html)**\
+The main hledger manuals combined on one page for easy searching.
+Includes:
 
-<div style="font-size:medium;">
+<div class=subcontent>
+[hledger](hledger.html)\
+the command-line UI
 
-hledger is an accounting program, for tracking money, time, or
-other commodities, on unix, mac and windows. With simple yet powerful
-functionality accessed from command line, terminal or web browser, it is a
-robust, cross-platform alternative to Quicken, GnuCash, spreadsheets etc.
+[hledger-ui](hledger-ui.html)\
+a curses-style UI
 
-<div class="indent0">
-### plain text ? How does that work ?
+[hledger-web](hledger-web.html)\
+a web UI
 
-**Step 1:**
-Record your transactions in a plain text file.
-(Use hledger's interactive assistant.. the web interface.. any text editor.. a shell alias.. CSV/OFX import..)
-<!-- using a simple format. -->
-<!-- Do it daily, or all at once. -->
-<!-- Record what you know; you'll get better at it. -->
+[hledger-api](hledger-api.html)\
+a HTTP JSON server
 
-**Step 2:**
-Ask hledger about your accounts.. transactions.. balances.. currencies.. monthly averages.. budgets.. market values..
-You can start very simply, and get more sophisticated as you learn more about double-entry accounting.
+[journal format](journal.html)\
+hledger's native file format
 
-There is an enthusiastic and growing community practising this way of accounting.
-which can be quite educational and enjoyable.
-If you'd like more background,
-we have collected many useful resources at **[plaintextaccounting.org](http://plaintextaccounting.org)**.
+[csv format](csv.html)\
+hledger's CSV import system
 
-And.. welcome back. Read on - or if you're eager to make a start, 
-**[download](download.html)** and start the **[tutorial](step-by-step.html)** now!
+[timeclock format](timeclock.html)\
+a file format for precise time logging
 
-<!-- I use it for: -->
-
-<!-- - tracking spending and income -->
-<!-- - seeing time reports by day/week/month/project -->
-<!-- - getting accurate numbers for client billing and tax filing -->
-<!-- - tracking invoices -->
-<!-- - building financial and time clarity and serenity -->
+[timedot format](timedot.html)\
+a file format for human-friendly approximate time logging
+</div>
 </div>
 
-<div class="indent1">
-### hledger is Free software
+<div id=dev class=contentbox>
+## Contribute
 
-<a href="http://www.gnu.org/licenses/gpl.html" style="float:right; margin:0 0 1em 0;"><img width="104" height="20" src="https://img.shields.io/badge/license-GPLv3+-brightgreen.svg" /></a>
-hledger is Free software, created by [Simon Michael](http://joyful.com)
-and released under GNU GPLv3+.
+**[Contributor Guide](CONTRIBUTING.html)**\
+What's to do and how to do it
 
-I have been actively developing and using hledger since 2007,
-together with 30+ other committers, and an unknown number of usually happy-sounding users.
-</div>
+**Help fund hledger!**\
+Making good software and documentation costs a lot.
 
-<div class="indent2">
-### inspired by Ledger
-
-hledger is a Haskell reimplementation of the excellent [Ledger](faq.html#hledger-and-ledger).
-It remains substantially compatible with Ledger, and if you wish you can keep your data compatible with both.
-Read more about the differences in the [FAQ](faq.html#hledger-and-ledger).
-
-
+<a href="https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&amp;hosted_button_id=5J33NLXYXCYAY"><img width=62 height=31 border=0 src="https://www.paypal.com/en_US/i/btn/x-click-but04.gif" title="Give one time or recurringly with Paypal" alt="paypal"></a>
+<a href="https://opencollective.com/hledger#support"><img border="0" src="https://opencollective.com/hledger/backers/badge.svg" title="Back us with a monthly donation at Open Collective" alt="open collective backers"></a>
+<a href="https://opencollective.com/hledger#support"><img border="0" src="https://opencollective.com/hledger/sponsors/badge.svg" title="Sponsor us with a $100+ monthly donation at Open Collective and get your organization's logo on our README" alt="open collective sponsors"></a>
+\
+<a href="https://www.bountysource.com/trackers/536505-simonmichael-hledger"><img border=0 src="https://www.bountysource.com/badge/tracker?tracker_id=536505" title="Contribute or claim issue bounties via Bountysource" alt="bountysource"></a>
+<!-- <a href="https://flattr.com/submit/auto?user_id=simonmichael&amp;url=http%3A%2F%2Fhledger.org" target="_blank"><img border="0" src="//api.flattr.com/button/flattr-badge-large.png" alt="" title="Give monthly with Flattr" alt="flattr"></a> -->
 
 </div>
 
-<div class="indent0">
-### a command-line tool, that respects your data
 
-<a href="images/balance-q-inc.png" class="highslide" onclick="return hs.expand(this)"><img src="images/balance-q-inc.png" title="Balance report showing income/expense by quarter" /></a>
+</div> <!-- column -->
+<div class="col-sm-4">
 
-hledger is first a command-line tool. 
-Your data lives in a plain text journal file which you can edit
-any way you wish; hledger reads that file and produces reports of
-various kinds, without changing your data. (It can help you add new
-transactions, but does not change existing ones.)
+<div id=wiki class=contentbox>
+<div class=subcontent>
+<!-- WIKICONTENT -->
+## [[Cookbook|Home]]
+
+### Getting started
+
+[[hledger basics tutorial]]  
+[[hledger terminology]]  
+[[Create a journal]]  
+[[hledger accounting concepts]]   
+[[Common journal entries]]  
+[[FAQ]]  
+[[Accounting links]]  
+
+### Managing data
+
+[[Convert CSV files]]  
+[[Customize default CSV accounts]]  
+[[Track changes with version control]]  
+[[Use another account separator character]]  
+["Full-fledged Hledger" tutorial](https://github.com/adept/full-fledged-hledger)&nbsp;&rarr;  
+["hledger: Make It So" tutorial (slideshow)](https://github.com/apauley/hledger-makeitso)&nbsp;&rarr;
+
+### Reporting
+
+[[Queries]]  
+[[hledger tags tutorial]]  
+[[Rewrite account names]]  
+
+### Accounting tasks
+
+[[hledger multicurrency tutorial]]  
+[[Foreign trip expenses]]  
+[[Budgeting and forecasting]]  
+[[Project accounting]]  
+[[Track investments]]  
+[[Time planning]]
+
+### Usage tips
+
+[[Addons]]  
+[[Command-line completion]]  
+[[Editor configuration]]  
+[[hledger-web tips]]  
+[[Mobile apps]]  
+[[Save frequently used options]]  
+[[Scripting]]  
+
+### See also...
+
+[plaintextaccounting.org](http://plaintextaccounting.org)
+([software](http://plaintextaccounting.org/#software),
+[docs](http://plaintextaccounting.org/#docs),
+[common&nbsp;tasks](http://plaintextaccounting.org/#common-tasks),
+[discussion](http://plaintextaccounting.org/#discussion))
+&nbsp;&rarr;  
+[Ledger](http://ledger-cli.org)
+([docs](https://www.ledger-cli.org/docs.html),
+[wiki](https://github.com/ledger/ledger/wiki))
+&nbsp;&rarr;  
+[Beancount](http://furius.ca/beancount)
+([docs](http://furius.ca/beancount/doc/index))
+&nbsp;&rarr;  
+<!-- ENDWIKICONTENT -->
+</div>
 </div>
 
-<a name="and-a-console-ui"></a>
-<div class="indent1">
-### a console UI
-
-<a href="images/hledger-ui/hledger-ui-bcexample-acc.png" class="highslide" onclick="return hs.expand(this)"><img src="images/hledger-ui/hledger-ui-bcexample-acc.png" title="hledger-ui accounts screen" /></a>
-hledger also provides a curses-style [console&nbsp;interface](manual#ui)
-that lets you review account balances and transactions quickly and without fuss.
-([screencast](https://asciinema.org/a/29665))
-</div>
-
-<div class="indent2">
-### a web UI
-
-<a href="images/hledger-web/normal/register.png" class="highslide" onclick="return hs.expand(this)"><img src="images/hledger-web/normal/register.png" title="Account register view with accounts sidebar" /></a>
-
-And, a zero-setup
-[web&nbsp;interface](manual.html#web) (
-[demo](http://demo.hledger.org)) for a more point-and-click experience.
-You can also set up your own public/private web instance in a few clicks
-at
-[Sandstorm](https://apps.sandstorm.io/app/8x12h6p0x0nrzk73hfq6zh2jxtgyzzcty7qsatkg7jfg2mzw5n90).
-</div>
-
-<div class="indent3">
-### a Haskell application and library
-
-<a href="images/hledger-lib-api.png" class="highslide" onclick="return hs.expand(this)"><img src="images/hledger-lib-api.png" title="Part of hledger-lib's haddock api documentation" /></a>
-
-hledger is written in Haskell, a modern, highly-regarded
-programming language which contributes to hledger's robustness,
-performance and long-term maintainability.  Most functionality is
-exposed as
-[reusable](http://hackage.haskell.org/package/hledger-lib)
-[Haskell](http://hackage.haskell.org/package/hledger)
-[libraries](http://hackage.haskell.org/package/hledger-web), making it
-easy to write your own hledger-compatible
-[scripts](more-docs.html#scripting-examples), [add-ons](manual.html#add-ons) and
-applications.
-&nbsp;&nbsp;[![build status (travis)](https://travis-ci.org/simonmichael/hledger.svg?branch=master)](https://travis-ci.org/simonmichael/hledger)
-</div>
-
-<!-- <div class="indent1"> -->
-<!-- ### comfortable for techies, usable by all -->
-
-<!-- hledger aims to be useful to both computer experts and regular folks. -->
-<!-- Currently it is a bit more suited to power users, who appreciate the -->
-<!-- power of text files, revision control, scriptability and double entry -->
-<!-- accounting. The web interface helps make it accessible to GUI-only -->
-<!-- folk as well. -->
-<!-- </div> -->
-
-<div class="indent0">
-### focussed on serving users
-
-hledger strives to be usable, practical and to provide real-world value.
-Intuitive features, bug-free operation and complete, accurate documentation are top goals.
-Currently it is particularly suited to techies, ie users who appreciate the
-power of text files, revision control, scriptability and double entry
-accounting. 
-
-I've been using hledger daily and improving it since 2007.
-I needed a tool like this badly, and I hope it will keep growing and
-helping folks to transform their financial lives.
-If you feel the same way, join us!
-
-</div>
-
-<div class="indent1">
-### fully documented
-
-Time to check out those **[docs](docs.html)**,
-or maybe **[look deeper](developer-guide.html)**.
-
-</div>
-
-</div>
-<!-- end of main content -->
-
-<div style="margin-top:4em; text-align:center; ">
-<div>
-#### Tweets (#hledger OR #plaintextaccounting OR #ledgercli):
-<a class="twitter-timeline" data-chrome="noheader" data-dnt="true" href="https://twitter.com/search?q=%23hledger%20OR%20%23plaintextaccounting%20OR%20%23ledgercli%20-RT%20-%23TheJoker" data-widget-id="707934052225945600">Tweets about #hledger OR #plaintextaccounting OR #ledgercli -RT -#TheJoker</a> <script>!function(d,s,id){var js,fjs=d.getElementsByTagName(s)[0],p=/^http:/.test(d.location)?'http':'https';if(!d.getElementById(id)){js=d.createElement(s);js.id=id;js.src=p+"://platform.twitter.com/widgets.js";fjs.parentNode.insertBefore(js,fjs);}}(document,"script","twitter-wjs");</script>
-</div>
+</div> <!-- column -->
+</div> <!-- row -->
+</div> <!-- container -->

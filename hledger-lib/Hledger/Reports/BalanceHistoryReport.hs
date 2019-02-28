@@ -8,14 +8,10 @@ Account balance history report.
 
 module Hledger.Reports.BalanceHistoryReport (
   accountBalanceHistory
-
-  -- -- * Tests
-  -- tests_Hledger_Reports_BalanceReport
 )
 where
 
 import Data.Time.Calendar
--- import Test.HUnit
 
 import Hledger.Data
 import Hledger.Query

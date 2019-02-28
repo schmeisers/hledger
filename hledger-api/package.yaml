@@ -1,5 +1,5 @@
 name: hledger-api
-version: '1.0'
+version: 1.13.99
 synopsis: Web API server for the hledger accounting tool
 description: |
   This is a simple web API server for hledger data.
@@ -12,45 +12,50 @@ description: |
   interfaces, and aims to be a reliable, practical tool for daily
   use.
 category: Finance
-license: GPL
+license: GPL-3
 author: Simon Michael <simon@joyful.com>
 maintainer: Simon Michael <simon@joyful.com>
 github: simonmichael/hledger
 homepage: http://hledger.org
 bug-reports: http://bugs.hledger.org
+stability: alpha
+tested-with: GHC==7.10.3, GHC==8.0.2, GHC==8.2.2, GHC==8.4.3
+
 extra-source-files:
-- CHANGES
+- CHANGES.md
 - README
 - examples/*.html
-data-files:
-- doc/hledger-api.1
-- doc/hledger-api.1.txt
-- doc/hledger-api.1.info
+- hledger-api.1
+- hledger-api.txt
+- hledger-api.info
+
+#data-files:
+
 dependencies:
-- hledger-lib >= 1.0 && < 1.1
-- hledger >= 1.0 && < 1.1
-- base >=4.8 && <5
+- hledger-lib >=1.13.99 && <1.14
+- hledger >=1.13.99 && <1.14
+- base >=4.8 && <4.13
 - aeson
 - bytestring
 - containers
+- data-default >=0.5
 - Decimal
 - docopt
 - either
-- microlens >=0.4 && <0.5
-- microlens-platform >=0.2.3.1 && <0.4
+- microlens >=0.4
+- microlens-platform >=0.2.3.1
 - safe
-- servant-server
+- servant-server >=0.10
 - servant-swagger
-- swagger2
+- swagger2 >=2.0
 - text
 - transformers
 - wai
 - wai-extra
 - warp
+
 executables:
   hledger-api:
     main: hledger-api.hs
     ghc-options: -threaded
-    cpp-options: -DVERSION="1.0"
-stability: alpha
-tested-with: GHC==7.10.3, GHC==8.0
+    cpp-options: -DVERSION="1.13.99"

@@ -7,7 +7,7 @@
 -- http://hackage.haskell.org/package/brick-0.1/docs/Brick-Widgets-Core.html#g:5
 -- http://hackage.haskell.org/package/brick-0.1/docs/Brick-Widgets-Border.html
 
-
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Hledger.UI.Theme (
@@ -15,15 +15,16 @@ module Hledger.UI.Theme (
   ,getTheme
   ,themes
   ,themeNames
- ) where
+)
+where
 
 import qualified Data.Map as M
 import Data.Maybe
+#if !(MIN_VERSION_base(4,11,0))
 import Data.Monoid
+#endif
 import Graphics.Vty
 import Brick
-import Brick.Widgets.Border
-import Brick.Widgets.List
 
 defaultTheme :: AttrMap
 defaultTheme = fromMaybe (snd $ head themesList) $ getTheme "white"
@@ -61,53 +62,50 @@ themeNames :: [String]
 themeNames = map fst themesList
 
 (&) = withStyle
+active = fg brightWhite & bold
+selectbg = yellow
+select = black `on` selectbg
 
 themesList :: [(String, AttrMap)]
 themesList = [
-  ("default", attrMap
-            (black `on` white & bold) [ -- default style for this theme
-              ("error", currentAttr `withForeColor` red),
-              (borderAttr       , white `on` black & dim),
-              (borderAttr <> "bold", white `on` black & bold),
-              (borderAttr <> "query", cyan `on` black & bold),
-              (borderAttr <> "depth", yellow `on` black & bold),
-              (borderAttr <> "keys", white `on` black & bold),
-              (borderAttr <> "minibuffer", white `on` black & bold),
-              -- ("normal"                , black `on` white),
-              ("list"                  , black `on` white),      -- regular list items
-              ("list" <> "selected"    , white `on` blue & bold), -- selected list items
-              -- ("list" <> "selected"     , black `on` brightYellow),
-              -- ("list" <> "accounts"  , white `on` brightGreen),
-              ("list" <> "amount" <> "increase", currentAttr `withForeColor` green),
-              ("list" <> "amount" <> "decrease", currentAttr `withForeColor` red),
-              ("list" <> "balance" <> "positive",  currentAttr `withForeColor` black),
-              ("list" <> "balance" <> "negative", currentAttr `withForeColor` red),
-              ("list" <> "amount" <> "increase" <> "selected", brightGreen `on` blue & bold),
-              ("list" <> "amount" <> "decrease" <> "selected", brightRed `on` blue & bold),
-              ("list" <> "balance" <> "positive" <> "selected",  white `on` blue & bold),
-              ("list" <> "balance" <> "negative" <> "selected", brightRed `on` blue & bold)
-              ]),
+   ("default", attrMap (black `on` white) [
+     ("border"                                        , white `on` black & dim)
+    ,("border" <> "bold"                              , currentAttr & bold)
+    ,("border" <> "depth"                             , active)
+    ,("border" <> "filename"                          , currentAttr)
+    ,("border" <> "key"                               , active)  
+    ,("border" <> "minibuffer"                        , white `on` black & bold)
+    ,("border" <> "query"                             , active)
+    ,("border" <> "selected"                          , active)
+    ,("error"                                         , fg red)
+    ,("help"                                          , white `on` black & dim)
+    ,("help" <> "heading"                             , fg yellow)
+    ,("help" <> "key"                                 , active)
+    -- ,("list"                                          , black `on` white)
+    -- ,("list" <> "amount"                              , currentAttr)
+    ,("list" <> "amount" <> "decrease"                , fg red)
+    -- ,("list" <> "amount" <> "increase"                , fg green)
+    ,("list" <> "amount" <> "decrease" <> "selected"  , red `on` selectbg & bold)
+    -- ,("list" <> "amount" <> "increase" <> "selected"  , green `on` selectbg & bold)
+    ,("list" <> "balance"                             , currentAttr & bold)
+    ,("list" <> "balance" <> "negative"               , fg red)
+    ,("list" <> "balance" <> "positive"               , fg black)
+    ,("list" <> "balance" <> "negative" <> "selected" , red `on` selectbg & bold)
+    ,("list" <> "balance" <> "positive" <> "selected" , select & bold)
+    ,("list" <> "selected"                            , select)
+    -- ,("list" <> "accounts"                         , white `on` brightGreen)
+    -- ,("list" <> "selected"                         , black `on` brightYellow)
+  ])
 
-  ("terminal", attrMap
-            defAttr [  -- use the current terminal's default style
-              (borderAttr       , white `on` black),
-              -- ("normal"         , defAttr),
-              (listAttr         , defAttr),
-              (listSelectedAttr , defAttr & reverseVideo & bold)
-              -- ("status"         , defAttr & reverseVideo)
-              ]),
+  ,("greenterm", attrMap (green `on` black) [
+    ("list" <> "selected"                             , black `on` green)
+  ])
 
-  ("greenterm", attrMap
-            (green `on` black) [
-              -- (listAttr                  , green `on` black),
-              (listSelectedAttr          , black `on` green & bold)
-              ])
-  -- ("colorful", attrMap
-  --           defAttr [
-  --             (listAttr         , defAttr & reverseVideo),
-  --             (listSelectedAttr , defAttr `withForeColor` white `withBackColor` red)
-  --             -- ("status"         , defAttr `withForeColor` black `withBackColor` green)
-  --             ])
+  ,("terminal", attrMap defAttr [
+    ("border"                                         , white `on` black),
+    ("list"                                           , defAttr),
+    ("list" <> "selected"                             , defAttr & reverseVideo)
+  ])
 
   ]
 
@@ -117,4 +115,3 @@ themesList = [
 -- greenattr = defAttr `withForeColor` green
 -- reverseredattr = defAttr & reverseVideo `withForeColor` red
 -- reversegreenattr= defAttr & reverseVideo `withForeColor` green
-
